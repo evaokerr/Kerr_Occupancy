@@ -102,11 +102,13 @@ cleaning_sf <- st_as_sf(cleaning,
 # 3. Reproject points into same CRS as wetlands (UTM meters)
 cleaning_sf <- st_transform(cleaning_sf, st_crs(wetlands))
 
-# 4. Compute centroid of each wetland polygon
-wet_centroids <- st_centroid(wetlands)
+# 4. Use the *edge* of each wetland polygon
+wetlands <- st_make_valid(wetlands)                 # safety for invalid polys
+wet_edge  <- st_boundary(wetlands)                  # LINESTRING boundary
 
-# 5. Build distance matrix (wetlands × cleaning points)
-dist_matrix <- st_distance(wet_centroids, cleaning_sf)
+# 5. Build distance matrix (wetland edge × cleaning points)
+dist_matrix <- st_distance(wet_edge, cleaning_sf)   # edge-to-point distance
+
 
 # 6. Find nearest, 2nd, 3rd
 nearest_idx <- apply(dist_matrix, 1, order)  # indices of sorted distances
@@ -116,18 +118,27 @@ wetlands$nearest_id_1 <- cleaning_sf$clean_id[nearest_idx[1, ]]
 wetlands$nearest_id_2 <- cleaning_sf$clean_id[nearest_idx[2, ]]
 wetlands$nearest_id_3 <- cleaning_sf$clean_id[nearest_idx[3, ]]
 
-# 7. Now you can plot
+# 7. Plot: wetlands, cleaning points, and edge-to-nearest segments
 plot(st_geometry(wetlands), border = "blue")
 plot(st_geometry(cleaning_sf), add = TRUE, col = "red", pch = 16)
 
-# Example: draw a line from each wetland centroid to its nearest point
-plot(st_geometry(wet_centroids), add = TRUE, col = "black", pch = 3)
+# Draw a segment from each wetland polygon to its nearest cleaning point (edge-based)
 for (i in seq_len(nrow(wetlands))) {
-  nearest_pt <- cleaning_sf[cleaning_sf$clean_id == wetlands$nearest_id_1[i], ]
-  plot(st_geometry(nearest_pt), add = TRUE, col = "green", pch = 17)
-  lines(rbind(st_coordinates(wet_centroids[i, ]),
-              st_coordinates(nearest_pt)), col = "green")
+  id1 <- wetlands$nearest_id_1[i]
+  if (is.na(id1)) next
+
+  # Find the matching point row by ID (robust to row order)
+  idx <- match(id1, cleaning_sf$clean_id)
+  if (is.na(idx)) next
+
+  nearest_pt <- cleaning_sf[idx, ]
+
+  # Segment that touches the polygon boundary and the point
+  seg <- sf::st_nearest_points(wetlands[i, ], nearest_pt)
+  plot(seg, add = TRUE, col = "green", lwd = 2)
+  plot(sf::st_geometry(nearest_pt), add = TRUE, col = "green", pch = 17)
 }
+
 
 
 ```
@@ -153,11 +164,12 @@ if (!any(c("BurrowID","burrow_id","ID","id") %in% names(burrows))) {
 # 3. Reproject burrows into same CRS as wetlands (UTM meters)
 burrows <- st_transform(burrows, st_crs(wetlands))
 
-# 4. Compute centroid of each wetland polygon
-wet_centroids <- st_centroid(wetlands)
+# 4. Use the *edge* of each wetland polygon
+wetlands <- st_make_valid(wetlands)
+wet_edge  <- st_boundary(wetlands)
 
-# 5. Build distance matrix (wetland centroids × burrow points)
-dist_matrix_b <- st_distance(wet_centroids, burrows)
+# 5. Build distance matrix (wetland edge × burrow points)
+dist_matrix_b <- st_distance(wet_edge, burrows)
 
 # 6. Find nearest, 2nd, 3rd
 nearest_idx_b <- apply(dist_matrix_b, 1, order)  # indices of sorted distances
@@ -167,17 +179,24 @@ wetlands$nearest_burrow_id_1 <- burrows[[burrow_id_col]][ nearest_idx_b[1, ] ]
 wetlands$nearest_burrow_id_2 <- burrows[[burrow_id_col]][ nearest_idx_b[2, ] ]
 wetlands$nearest_burrow_id_3 <- burrows[[burrow_id_col]][ nearest_idx_b[3, ] ]
 
-# 7. Plot (same style)
+# 7. Plot (edge-based): wetlands, burrows, and segments to nearest burrow
 plot(st_geometry(wetlands), border = "blue")
 plot(st_geometry(burrows), add = TRUE, col = "orange", pch = 17)   # burrow points
-plot(st_geometry(wet_centroids), add = TRUE, col = "black", pch = 3)
 
-# Draw a line from each wetland centroid to its nearest burrow (1st only)
 for (i in seq_len(nrow(wetlands))) {
-  nearest_pt <- burrows[ burrows[[burrow_id_col]] == wetlands$nearest_burrow_id_1[i], ]
-  plot(st_geometry(nearest_pt), add = TRUE, col = "green", pch = 17)
-  lines(rbind(st_coordinates(wet_centroids[i, ]),
-              st_coordinates(nearest_pt)), col = "green")
+  id1 <- wetlands$nearest_burrow_id_1[i]
+  if (is.na(id1)) next
+
+  # Find the matching burrow row by ID (robust to row order)
+  idx <- match(id1, burrows[[burrow_id_col]])
+  if (is.na(idx)) next
+
+  nearest_pt <- burrows[idx, ]
+
+  # Segment that touches the polygon boundary and the burrow point
+  seg <- sf::st_nearest_points(wetlands[i, ], nearest_pt)
+  plot(seg, add = TRUE, col = "green", lwd = 2)
+  plot(sf::st_geometry(nearest_pt), add = TRUE, col = "green", pch = 17)
 }
 
 
@@ -189,7 +208,6 @@ library(units)
 # --- Require objects from previous chunks ---
 stopifnot(
   exists("wetlands"),
-  exists("wet_centroids"),
   exists("cleaning_sf"),
   exists("burrows"),
   exists("dist_matrix"),      # centroids x cleaning
