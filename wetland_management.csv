@@ -1,0 +1,58 @@
+﻿Site,WetlandID,State,Thinned,Last_Thinned,YrThinned,Burned,Last_Burn,YrBurn,Filled,Last_Filled,YrFilled
+Alapaha River WMA,3,Historic,1,74,1950,1,1,2023,0,124,1900
+Alapaha River WMA,4,Historic,1,74,1950,1,1,2023,1,2,2022
+Alapaha River WMA,8,Restored,0,124,1900,0,1,2023,1,2,2022
+Alapaha River WMA,10,Restored,0,124,1900,0,1,2023,1,2,2022
+Alapaha River WMA,15,Restored,1,6,2018,1,1,2023,0,124,1900
+Alapaha River WMA,18,Restored,1,6,2018,1,1,2023,0,124,1900
+Alapaha River WMA,20,Restored,1,6,2018,1,1,2023,1,2,2022
+Alapaha River WMA,22,Unrestored,0,124,1900,0,1,2023,0,124,1900
+Alapaha River WMA,23,Unrestored,0,124,1900,0,1,2023,0,124,1900
+Alapaha River WMA,29,Unrestored,0,124,1900,0,1,2023,0,124,1900
+Alapaha River WMA,30,Restored,1,6,2018,1,1,2023,0,124,1900
+Alapaha River WMA,31,Unrestored,0,124,1900,0,1,2023,0,124,1900
+Alapaha River WMA,32,Restored,0,124,1900,1,1,2023,0,124,1900
+Alapaha River WMA,34,Restored,0,124,1900,1,1,2023,0,124,1900
+Alapaha River WMA,39,Unrestored,0,124,1900,0,1,2023,0,124,1900
+Alapaha River WMA,40,Unrestored,0,124,1900,0,1,2023,0,124,1900
+Alapaha River WMA,41,Unrestored,0,124,1900,0,1,2023,0,124,1900
+Alapaha River WMA,42,Restored,1,2024,,0,1,2023,0,124,1900
+Alapaha River WMA,43,Restored,0,124,1900,1,1,2023,0,124,1900
+Cabin Bluff,170,Restored,1,2,2022,0,124,1900,0,124,1900
+Cabin Bluff,179,Restored,0,124,1900,1,2,2022,0,124,1900
+Cabin Bluff,183,Restored,1,2,2022,0,124,1900,0,124,1900
+Cabin Bluff,184,Unrestored,0,124,1900,0,124,1900,0,124,1900
+Cabin Bluff,189,Restored,0,124,1900,1,2,2022,0,124,1900
+Cabin Bluff,290,Restored,0,124,1900,1,2,2022,0,124,1900
+Ceylon WMA,22,Unrestored,0,124,1900,0,124,1900,0,124,1900
+Ceylon WMA,37,Unrestored,0,124,1900,0,124,1900,0,124,1900
+Ceylon WMA,41,Unrestored,0,124,1900,0,124,1900,0,124,1900
+Ceylon WMA,54,Unrestored,0,124,1900,0,124,1900,0,124,1900
+Ceylon WMA,55,Unrestored,0,124,1900,0,124,1900,0,124,1900
+Ceylon WMA,59,Unrestored,0,124,1900,1,6,2018,0,124,1900
+Ceylon WMA,60,Unrestored,0,124,1900,0,124,1900,0,124,1900
+Ceylon WMA,62,Unrestored,0,124,1900,0,124,1900,0,124,1900
+Ceylon WMA,69,Unrestored,0,124,1900,0,124,1900,0,124,1900
+Ceylon WMA,109,Unrestored,0,124,1900,0,124,1900,0,124,1900
+Ceylon WMA,127,Unrestored,0,124,1900,0,124,1900,0,124,1900
+Ceylon WMA,109B,Borrow Pit,0,124,1900,0,124,1900,0,124,1900
+Ceylon WMA,41B,Borrow Pit,0,124,1900,0,124,1900,0,124,1900
+Ceylon WMA,69B,Borrow Pit,0,124,1900,0,124,1900,0,124,1900
+Jones Center Ichauway,15,Historic,1,0,2024,1,0,2024,0,124,1900
+Jones Center Ichauway,21,Historic,0,124,1900,1,0,2024,0,124,1900
+Jones Center Ichauway,37,Historic,0,124,1900,1,0,2024,0,124,1900
+Jones Center Ichauway,39,Historic,0,124,1900,1,1,2023,0,124,1900
+Jones Center Ichauway,40,Historic,0,124,1900,1,1,2023,0,124,1900
+Jones Center Ichauway,41,Historic,1,1,2023,1,1,2023,0,124,1900
+Jones Center Ichauway,42,Historic,0,124,1900,1,1,2023,0,124,1900
+Jones Center Ichauway,46,Historic,1,2,2022,1,1,2023,0,124,1900
+Jones Center Ichauway,49,Borrow Pit,0,124,1900,1,1,2023,0,124,1900
+Jones Center Ichauway,50,Historic,0,124,1900,1,0,2024,0,124,1900
+Jones Center Ichauway,51,Historic,1,4,2009,1,0,2024,0,124,1900
+Jones Center Ichauway,53,Historic,1,124,1900,1,1,2023,0,124,1900
+Jones Center Ichauway,55,Historic,1,2,2022,1,1,2023,0,124,1900
+Townsend WMA,Cutgrass,Unrestored,0,124,1900,0,124,1900,0,124,1900
+Townsend WMA,Deadwood,Restored,1,3,2021,1,0,2024,0,124,1900
+Townsend WMA,Milfoil,Restored,0,124,1900,1,0,2024,0,124,1900
+Townsend WMA,Plum Orchard,Restored,0,124,1900,1,0,2024,0,124,1900
+Townsend WMA,Snot Bonnet,Restored,0,124,1900,1,0,2024,0,124,1900

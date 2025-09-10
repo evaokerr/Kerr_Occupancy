@@ -1,0 +1,373 @@
+---
+title: "Occupancy Mod"
+author: "Eva Kerr"
+date: "2025-09-10"
+output: html_document
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# libs
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(readr)
+library(jagsUI)
+
+```
+
+```{r}
+habitat_data   <- read.csv("7.18_CoverClassPercent_clean.csv")
+call_data      <- read.csv("long_all_call_data_2021_2024.csv")
+dip_data       <- read.csv("DipnetData2019_2025clean.csv")
+hydro_data     <- read.csv("WetlandHydroperiod_2024_EK.csv")
+wet_near_data  <- read.csv("wetlands_nearby_clean.csv")
+ratio_data     <- read.csv("wetlands_nearest_cleaning_burrows_ratios.csv")  # must contain Site, WetlandID, ratio_1_f_to_b
+
+```
+
+```{r}
+# Dates
+call_data$Date1 <- as.Date(call_data$Date1, format = "%m/%d/%y")
+dip_data$Date_MMDDYYYY <- as.Date(dip_data$Date_MMDDYYYY, format = "%m/%d/%y")
+
+# Harmonize site names
+fix_sites <- function(x) dplyr::recode(x,
+  "Ceylon" = "Ceylon WMA",
+  "Jones Center" = "Jones Center Ichauway",
+  "ARWMA" = "Alapaha River WMA",
+  "TWMA" = "Townsend WMA"
+)
+
+call_data$Site     <- fix_sites(call_data$Site)
+dip_data$Site      <- fix_sites(dip_data$Site)
+habitat_data$Site  <- fix_sites(habitat_data$Site)
+hydro_data$Site    <- fix_sites(hydro_data$Site)
+wet_near_data$Site <- fix_sites(wet_near_data$Site)
+ratio_data$Site    <- fix_sites(ratio_data$Site)
+
+# Keep only Ceylon WMA & Jones Center Ichauway in all tables
+keep_sites <- c("Ceylon WMA", "Jones Center Ichauway")
+call_data     <- call_data    %>% filter(Site %in% keep_sites)
+dip_data      <- dip_data     %>% filter(Site %in% keep_sites)
+habitat_data  <- habitat_data %>% filter(Site %in% keep_sites)
+hydro_data    <- hydro_data   %>% filter(Site %in% keep_sites)
+wet_near_data <- wet_near_data%>% filter(Site %in% keep_sites)
+ratio_data    <- ratio_data   %>% filter(Site %in% keep_sites)
+
+# Subset to study wetlands only (Site+WetlandID present in hydro)
+key_h <- hydro_data %>% distinct(Site, WetlandID)
+call_data    <- call_data    %>% semi_join(key_h, by=c("Site","WetlandID"))
+dip_data     <- dip_data     %>% semi_join(key_h, by=c("Site","WetlandID"))
+habitat_data <- habitat_data %>% semi_join(key_h, by=c("Site","WetlandID"))
+wet_near_data<- wet_near_data%>% semi_join(key_h, by=c("Site","WetlandID"))
+ratio_data   <- ratio_data   %>% semi_join(key_h, by=c("Site","WetlandID"))
+
+# Species recode (only need LICAP)
+call_data$Species <- dplyr::recode(call_data$Species, "LICAP" = "Rana capito")
+dip_data$Species  <- dplyr::recode(dip_data$Species,  "LICAP" = "Rana capito")
+
+# Keep only Rana capito for detections
+call_data <- call_data %>% filter(Species == "Rana capito")
+dip_data  <- dip_data  %>% filter(Species == "Rana capito")
+
+# Fix call score (treat NA as 0; also cap 4 -> 3 if present)
+call_data$Call_Score[is.na(call_data$Call_Score)] <- 0
+call_data$Call_Score[call_data$Call_Score == 4] <- 3
+call_data$Detected <- as.integer(call_data$Call_Score > 0)
+
+# Month & Year
+call_data$Month <- factor(format(call_data$Date1, "%B"),
+                          levels=month.name)
+dip_data$Month <- factor(format(dip_data$Date_MMDDYYYY, "%B"),
+                         levels=month.name)
+
+# Years
+all_years <- sort(unique(c(call_data$Year, dip_data$Year)))
+call_data$YearIndex <- match(call_data$Year, all_years)
+dip_data$YearIndex  <- match(dip_data$Year , all_years)
+
+nYear   <- length(all_years)
+nMonths <- 12
+
+```
+
+```{r}
+site_levels <- factor(keep_sites, levels = keep_sites) # ensure order: Ceylon, Jones
+nSites <- length(site_levels)
+
+# Count wetlands per site (from hydro)
+nWetlands_tbl <- hydro_data %>%
+  group_by(Site) %>% summarise(nWet = n_distinct(WetlandID), .groups="drop") %>%
+  complete(Site = site_levels, fill = list(nWet = 0)) %>%
+  arrange(Site)
+
+nWetlands_vec <- nWetlands_tbl$nWet
+maxWetlands   <- max(nWetlands_vec)
+
+# Make a lookup index for wetlands per site
+wet_index <- hydro_data %>%
+  arrange(Site, WetlandID) %>%
+  group_by(Site) %>%
+  mutate(WetID = as.integer(factor(WetlandID, levels = unique(WetlandID)))) %>%
+  ungroup() %>% select(Site, WetlandID, WetID) %>% distinct()
+
+```
+
+```{r}
+# Canopy cover (% of tree veg)
+can_pre <- habitat_data %>%
+  filter(VegType == "tree") %>%
+  select(Site, WetlandID, CovPercent) %>%
+  inner_join(wet_index, by = c("Site","WetlandID"))
+
+canopy <- matrix(NA_real_, nSites, maxWetlands)
+for (j in seq_len(nSites)) {
+  ss <- can_pre %>% filter(Site == site_levels[j])
+  if (nrow(ss)) canopy[j, ss$WetID] <- ss$CovPercent
+}
+
+# Hydroperiod (0–12 proportion of months with water)
+hyd_pre <- hydro_data %>%
+  select(Site, WetlandID, prop_water) %>%
+  inner_join(wet_index, by = c("Site","WetlandID"))
+
+hydro <- matrix(NA_real_, nSites, maxWetlands)
+for (j in seq_len(nSites)) {
+  ss <- hyd_pre %>% filter(Site == site_levels[j])
+  if (nrow(ss)) hydro[j, ss$WetID] <- as.numeric(ss$prop_water)
+}
+
+# Nearby wetlands (within 500 m)
+near_pre <- wet_near_data %>%
+  select(Site, WetlandID, Count_500) %>%
+  inner_join(wet_index, by = c("Site","WetlandID"))
+
+nNearby_05 <- matrix(NA_real_, nSites, maxWetlands)
+for (j in seq_len(nSites)) {
+  ss <- near_pre %>% filter(Site == site_levels[j])
+  if (nrow(ss)) nNearby_05[j, ss$WetID] <- ss$Count_500
+}
+
+ratio_pre <- ratio_data %>%
+  select(Site, wetland_id, ratio_b_to_f_1) %>%
+  rename(WetlandID = wetland_id) %>%        
+  inner_join(wet_index, by = c("Site","WetlandID"))
+
+
+ratio_mat <- matrix(NA_real_, nSites, maxWetlands)
+for (j in seq_len(nSites)) {
+  ss <- ratio_pre %>% filter(Site == site_levels[j])
+  if (nrow(ss)) ratio_mat[j, ss$WetID] <- as.numeric(ss$ratio_1_f_to_b)
+}
+
+# Safe scaling helper
+safe_scale_mat <- function(M) {
+  apply(M, 2, function(x) {
+    s <- sd(x, na.rm = TRUE); m <- mean(x, na.rm = TRUE)
+    if (is.na(s) || s == 0) ifelse(is.na(x), NA, 0) else (x - m)/s
+  })
+}
+
+canopy_sc    <- safe_scale_mat(canopy)
+hydro_sc     <- safe_scale_mat(hydro)
+nNearby_sc   <- safe_scale_mat(nNearby_05)
+ratio_sc     <- safe_scale_mat(ratio_mat)
+
+```
+
+```{r}
+# Initialize: [site, wetland, month, year]
+effort_dip  <- array(0L, dim = c(nSites, maxWetlands, nMonths, nYear))
+effort_call <- array(0L, dim = c(nSites, maxWetlands, nMonths, nYear))
+y_dip       <- array(0L, dim = c(nSites, maxWetlands, nMonths, nYear))
+y_call      <- array(0L, dim = c(nSites, maxWetlands, nMonths, nYear))
+
+# Fill dip effort & detections
+if (nrow(dip_data)) {
+  dip_use <- dip_data %>%
+    inner_join(wet_index, by = c("Site","WetlandID")) %>%
+    mutate(site_j = as.integer(factor(Site, levels = site_levels)),
+           mon_k  = as.integer(Month),
+           yr_t   = YearIndex) %>%
+    filter(!is.na(site_j), !is.na(WetID), !is.na(mon_k), !is.na(yr_t))
+  
+  for (i in seq_len(nrow(dip_use))) {
+    j <- dip_use$site_j[i]; w <- dip_use$WetID[i]; m <- dip_use$mon_k[i]; t <- dip_use$yr_t[i]
+    effort_dip[j,w,m,t] <- 1L
+    y_dip[j,w,m,t]      <- 1L   # presence in dip row = detection
+  }
+}
+
+# Only analyzed call files (Listener non-empty) contribute effort
+analyzed_calls <- call_data %>%
+  filter(!(is.na(Listener) | Listener == "")) %>%
+  inner_join(wet_index, by = c("Site","WetlandID")) %>%
+  mutate(site_j = as.integer(factor(Site, levels = site_levels)),
+         mon_k  = as.integer(Month),
+         yr_t   = YearIndex) %>%
+  filter(!is.na(site_j), !is.na(WetID), !is.na(mon_k), !is.na(yr_t))
+
+for (i in seq_len(nrow(analyzed_calls))) {
+  j <- analyzed_calls$site_j[i]; w <- analyzed_calls$WetID[i]; m <- analyzed_calls$mon_k[i]; t <- analyzed_calls$yr_t[i]
+  effort_call[j,w,m,t] <- 1L
+  if (analyzed_calls$Detected[i] == 1L) y_call[j,w,m,t] <- 1L
+}
+
+```
+
+```{r}
+# Landscape index (1=Ceylon, 2=Jones) for random effect
+landscape <- c(1, 2)  # length = nSites
+nLand <- 2
+
+# Replace remaining NAs in covariates with 0 (post-scaling)
+cov_na_to0 <- function(M) { M[is.na(M)] <- 0; M }
+canopy_sc  <- cov_na_to0(canopy_sc)
+hydro_sc   <- cov_na_to0(hydro_sc)
+nNearby_sc <- cov_na_to0(nNearby_sc)
+ratio_sc   <- cov_na_to0(ratio_sc)
+
+data_list <- list(
+  nSites = nSites,
+  nLand  = nLand,
+  nMonths = nMonths,
+  nYear  = nYear,
+  nWetlands = nWetlands_vec,
+  maxWetlands = maxWetlands,
+  landscape = landscape,
+  canopy = canopy_sc,
+  hydro  = hydro_sc,
+  dist   = nNearby_sc,
+  ratio  = ratio_sc,
+  y_dip = y_dip,
+  y_call = y_call,
+  effort_dip  = effort_dip,
+  effort_call = effort_call
+)
+
+```
+
+```{r}
+cat(file = "licap_occ_simple.jags", '
+model{
+
+  # Priors
+  alpha0        ~ dnorm(0, 0.5)
+  alpha_canopy  ~ dnorm(0, 0.5)
+  alpha_hydro   ~ dnorm(0, 0.5)
+  alpha_dist    ~ dnorm(0, 0.5)
+  alpha_ratio   ~ dnorm(0, 0.5)
+
+  tau_land ~ dgamma(0.1, 0.1)
+  for(l in 1:nLand){
+    land_re[l] ~ dnorm(0, tau_land)
+  }
+
+  beta0_dip  ~ dnorm(0, 0.5)
+  beta0_call ~ dnorm(0, 0.5)
+
+  pr_dip  ~ dexp(1)
+  pr_call ~ dexp(1)
+
+  for(m in 1:nMonths){
+    beta_mon_dip[m]  ~ dnorm(0, pr_dip)
+    beta_mon_call[m] ~ dnorm(0, pr_call)
+  }
+  for(t in 1:nYear){
+    beta_yr_dip[t]   ~ dnorm(0, pr_dip)
+    beta_yr_call[t]  ~ dnorm(0, pr_call)
+  }
+
+  # Ecological & observation processes (single species)
+  for(j in 1:nSites){
+    for(w in 1:nWetlands[j]){
+      for(t in 1:nYear){
+
+        logit(psi[j,w,t]) <- alpha0
+                            + land_re[landscape[j]]
+                            + alpha_canopy * canopy[j,w]
+                            + alpha_hydro  * hydro[j,w]
+                            + alpha_dist   * dist[j,w]
+                            + alpha_ratio  * ratio[j,w]
+
+        z[j,w,t] ~ dbern(psi[j,w,t])
+
+        for(m in 1:nMonths){
+          logit(p_dip[j,w,m,t])  <- beta0_dip  + beta_mon_dip[m]  + beta_yr_dip[t]
+          logit(p_call[j,w,m,t]) <- beta0_call + beta_mon_call[m] + beta_yr_call[t]
+
+          y_dip[j,w,m,t]  ~ dbern(z[j,w,t] * p_dip[j,w,m,t]  * effort_dip[j,w,m,t])
+          y_call[j,w,m,t] ~ dbern(z[j,w,t] * p_call[j,w,m,t] * effort_call[j,w,m,t])
+        }
+      }
+    }
+  }
+
+  # Derived: site-year occupancy proportion
+  for(j in 1:nSites){
+    for(t in 1:nYear){
+      occ_count[j,t] <- sum(z[j,1:nWetlands[j],t])
+      occ_prop[j,t]  <- occ_count[j,t] / nWetlands[j]
+    }
+  }
+}
+')
+
+```
+
+```{r}
+# z inits from detections
+z_init <- array(NA, dim = c(nSites, maxWetlands, nYear))
+for (j in seq_len(nSites)) {
+  for (w in seq_len(nWetlands_vec[j])) {
+    for (t in seq_len(nYear)) {
+      any_det <- any(y_dip[j,w,,t] == 1) || any(y_call[j,w,,t] == 1)
+      z_init[j,w,t] <- ifelse(any_det, 1L, rbinom(1,1,0.5))
+    }
+  }
+}
+
+inits_fun <- function(){
+  list(
+    z = z_init,
+    alpha0 = 0,
+    alpha_canopy = 0,
+    alpha_hydro  = 0,
+    alpha_dist   = 0,
+    alpha_ratio  = 0,
+    beta0_dip = 0, beta0_call = 0
+  )
+}
+
+params <- c(
+  "alpha0","alpha_canopy","alpha_hydro","alpha_dist","alpha_ratio",
+  "land_re","beta0_dip","beta0_call","beta_mon_dip","beta_mon_call",
+  "beta_yr_dip","beta_yr_call","occ_prop"
+)
+
+fit <- jagsUI::jags(
+  data = data_list,
+  inits = inits_fun,
+  parameters.to.save = params,
+  model.file = "licap_occ_simple.jags",
+  n.chains = 3, n.iter = 8000, n.burnin = 4000, n.thin = 4, parallel = TRUE
+)
+
+print(fit, digits = 3)
+
+```
+
+```{r}
+sumtab <- fit$summary
+bad_rhat <- rownames(sumtab)[sumtab[, "Rhat"] > 1.01]
+low_neff <- rownames(sumtab)[sumtab[, "n.eff"] < 400]
+
+list(
+  rhat_gt_1.01 = bad_rhat,
+  neff_lt_400  = low_neff
+)
+
+```
+

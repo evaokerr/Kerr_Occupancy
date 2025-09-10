@@ -1,0 +1,265 @@
+---
+title: "Burrow Cleaning"
+author: "Eva Kerr"
+date: "2025-09-09"
+output: html_document
+---
+
+```{r}
+library(readr)
+library(dplyr)
+
+raw_data <- read_csv("GA Gopher Frog locations through 2024.csv")
+
+```
+```{r}
+Unconfirmed <- raw_data %>%
+  select(
+    `Confirmed Habitat`,
+    year.found,
+    Latitude,
+    Longitude,
+    Site,
+    County,
+  ) %>%
+  filter(County == "Camden") %>%
+  filter(!`Confirmed Habitat` %in% c("dip net", "at wetland", "in wetland", "Aquatic"))
+
+cleaning <- Unconfirmed %>%
+  filter(!Longitude %in% c(-81.61694562, -81.61695873, -81.61698016, -81.617033))
+
+write.csv(cleaning, "cleaning.csv", row.names = FALSE)
+
+```
+
+```{r}
+wetland <- read_csv("wetland_management.csv") %>%
+  select(Site, WetlandID) %>%
+  filter(Site == "Ceylon WMA")
+```
+
+```{r}
+library(sf)
+library(dplyr)
+library(stringr)
+
+# 1) Read the full Ceylon wetlands shapefile
+#    Adjust the path/filename if needed (point to the .shp file)
+ceylon_all <- st_read("ceylon_all.shp")
+
+wetland_ids <- wetland %>%
+  mutate(WetlandID = str_squish(str_to_upper(as.character(WetlandID)))) %>%
+  distinct(WetlandID)
+
+# Correct version
+ceylon_all <- ceylon_all %>%
+  mutate(WetlandID = str_squish(str_to_upper(as.character(`Wetland.ID`))))
+
+
+# 3) Keep only features whose WetlandID is in your wetland df
+ceylon_subset <- ceylon_all %>%
+  semi_join(wetland_ids, by = "WetlandID")
+# Reorder columns: WetlandID first, then everything else
+ceylon_subset <- ceylon_subset %>%
+  select(WetlandID, everything())
+
+# Drop redundant columns if they exist
+ceylon_subset <- ceylon_subset %>%
+  select(-any_of(c("Wetland_ID", "wetlandid")))
+
+# Sanitize column names for shapefile
+safe_names <- names(ceylon_subset) |>
+  gsub("[^A-Za-z0-9_]", "_", x = _) |>  # replace spaces with underscores
+  substr(1, 10) |>                      # enforce 10-char max
+  make.unique(sep = "_")                # make unique if duplicates
+
+names(ceylon_subset) <- safe_names
+
+# Write shapefile
+st_write(ceylon_subset,
+         dsn = "ceylon_wetlands_subset.shp",
+         delete_dsn = TRUE)
+
+```
+```{r}
+library(sf)
+library(dplyr)
+
+# 1. Read wetlands (already projected in UTM 17N, good for meters!)
+wetlands <- st_read("ceylon_wetlands_subset.shp")
+
+# 2. Read cleaning points (CSV with lat/long WGS84)
+cleaning <- read.csv("cleaning.csv", stringsAsFactors = FALSE)
+
+# Add a simple ID so we can track them
+cleaning$clean_id <- paste0("pt_", seq_len(nrow(cleaning)))
+
+# Convert cleaning to sf points
+cleaning_sf <- st_as_sf(cleaning,
+                        coords = c("Longitude", "Latitude"),
+                        crs = 4326)  # WGS84
+
+# 3. Reproject points into same CRS as wetlands (UTM meters)
+cleaning_sf <- st_transform(cleaning_sf, st_crs(wetlands))
+
+# 4. Compute centroid of each wetland polygon
+wet_centroids <- st_centroid(wetlands)
+
+# 5. Build distance matrix (wetlands × cleaning points)
+dist_matrix <- st_distance(wet_centroids, cleaning_sf)
+
+# 6. Find nearest, 2nd, 3rd
+nearest_idx <- apply(dist_matrix, 1, order)  # indices of sorted distances
+
+# For each wetland, get the first 3 nearest point IDs
+wetlands$nearest_id_1 <- cleaning_sf$clean_id[nearest_idx[1, ]]
+wetlands$nearest_id_2 <- cleaning_sf$clean_id[nearest_idx[2, ]]
+wetlands$nearest_id_3 <- cleaning_sf$clean_id[nearest_idx[3, ]]
+
+# 7. Now you can plot
+plot(st_geometry(wetlands), border = "blue")
+plot(st_geometry(cleaning_sf), add = TRUE, col = "red", pch = 16)
+
+# Example: draw a line from each wetland centroid to its nearest point
+plot(st_geometry(wet_centroids), add = TRUE, col = "black", pch = 3)
+for (i in seq_len(nrow(wetlands))) {
+  nearest_pt <- cleaning_sf[cleaning_sf$clean_id == wetlands$nearest_id_1[i], ]
+  plot(st_geometry(nearest_pt), add = TRUE, col = "green", pch = 17)
+  lines(rbind(st_coordinates(wet_centroids[i, ]),
+              st_coordinates(nearest_pt)), col = "green")
+}
+
+
+```
+```{r}
+
+library(sf)
+library(dplyr)
+
+# 1. Read wetlands (already projected in UTM 17N, good for meters!)
+wetlands <- st_read("ceylon_wetlands_subset.shp")
+
+# 2. Read burrows (points, any CRS)
+burrows <- st_read("all_burrows.shp")
+
+# Add a simple burrow ID if needed
+if (!any(c("BurrowID","burrow_id","ID","id") %in% names(burrows))) {
+  burrows$burrow_id <- paste0("b_", seq_len(nrow(burrows)))
+  burrow_id_col <- "burrow_id"
+} else {
+  burrow_id_col <- intersect(names(burrows), c("BurrowID","burrow_id","ID","id"))[1]
+}
+
+# 3. Reproject burrows into same CRS as wetlands (UTM meters)
+burrows <- st_transform(burrows, st_crs(wetlands))
+
+# 4. Compute centroid of each wetland polygon
+wet_centroids <- st_centroid(wetlands)
+
+# 5. Build distance matrix (wetland centroids × burrow points)
+dist_matrix_b <- st_distance(wet_centroids, burrows)
+
+# 6. Find nearest, 2nd, 3rd
+nearest_idx_b <- apply(dist_matrix_b, 1, order)  # indices of sorted distances
+
+# For each wetland, get the first 3 nearest burrow IDs
+wetlands$nearest_burrow_id_1 <- burrows[[burrow_id_col]][ nearest_idx_b[1, ] ]
+wetlands$nearest_burrow_id_2 <- burrows[[burrow_id_col]][ nearest_idx_b[2, ] ]
+wetlands$nearest_burrow_id_3 <- burrows[[burrow_id_col]][ nearest_idx_b[3, ] ]
+
+# 7. Plot (same style)
+plot(st_geometry(wetlands), border = "blue")
+plot(st_geometry(burrows), add = TRUE, col = "orange", pch = 17)   # burrow points
+plot(st_geometry(wet_centroids), add = TRUE, col = "black", pch = 3)
+
+# Draw a line from each wetland centroid to its nearest burrow (1st only)
+for (i in seq_len(nrow(wetlands))) {
+  nearest_pt <- burrows[ burrows[[burrow_id_col]] == wetlands$nearest_burrow_id_1[i], ]
+  plot(st_geometry(nearest_pt), add = TRUE, col = "green", pch = 17)
+  lines(rbind(st_coordinates(wet_centroids[i, ]),
+              st_coordinates(nearest_pt)), col = "green")
+}
+
+
+```
+```{r}
+library(dplyr)
+library(units)
+
+# --- Require objects from previous chunks ---
+stopifnot(
+  exists("wetlands"),
+  exists("wet_centroids"),
+  exists("cleaning_sf"),
+  exists("burrows"),
+  exists("dist_matrix"),      # centroids x cleaning
+  exists("nearest_idx"),      # order indices for cleaning
+  exists("dist_matrix_b"),    # centroids x burrows
+  exists("nearest_idx_b")     # order indices for burrows
+)
+
+# Wetland ID column (adjust the preference order if needed)
+wet_id_col <- intersect(names(wetlands),
+                        c("WetlandID","WETLANDID","wetlandid","Name","NAME","id","ID","Site","SITE"))[1]
+if (is.na(wet_id_col)) {
+  wetlands$.wetland_row <- seq_len(nrow(wetlands))
+  wet_id_col <- ".wetland_row"
+}
+
+# Drop units for arithmetic/indexing
+D_clean <- units::drop_units(as.matrix(dist_matrix))
+D_burr  <- units::drop_units(as.matrix(dist_matrix_b))
+
+row_idx <- seq_len(nrow(wetlands))
+
+# ---- IDs (already computed; pull from existing objects) ----
+clean_id_col  <- "clean_id"  # set earlier
+burrow_id_col <- if ("burrow_id" %in% names(burrows)) "burrow_id" else
+                 intersect(names(burrows), c("BurrowID","ID","id"))[1]
+
+c_id_1 <- cleaning_sf[[clean_id_col]][ nearest_idx[1, ] ]
+c_id_2 <- cleaning_sf[[clean_id_col]][ nearest_idx[2, ] ]
+c_id_3 <- cleaning_sf[[clean_id_col]][ nearest_idx[3, ] ]
+
+b_id_1 <- burrows[[burrow_id_col]][ nearest_idx_b[1, ] ]
+b_id_2 <- burrows[[burrow_id_col]][ nearest_idx_b[2, ] ]
+b_id_3 <- burrows[[burrow_id_col]][ nearest_idx_b[3, ] ]
+
+# ---- Distances (meters) ----
+c_d_1 <- D_clean[cbind(row_idx, nearest_idx[1, ])]
+c_d_2 <- D_clean[cbind(row_idx, nearest_idx[2, ])]
+c_d_3 <- D_clean[cbind(row_idx, nearest_idx[3, ])]
+
+b_d_1 <- D_burr [cbind(row_idx, nearest_idx_b[1, ])]
+b_d_2 <- D_burr [cbind(row_idx, nearest_idx_b[2, ])]
+b_d_3 <- D_burr [cbind(row_idx, nearest_idx_b[3, ])]
+
+# ---- Ratios (burrow / cleaning) ----
+safe_ratio <- function(b, c) ifelse(is.na(b) | is.na(c) | c == 0, NA_real_, b / c)
+r_1 <- safe_ratio(b_d_1, c_d_1)
+r_2 <- safe_ratio(b_d_2, c_d_2)
+r_3 <- safe_ratio(b_d_3, c_d_3)
+
+# ---- Final dataframe ----
+nearest_summary <- tibble::tibble(
+  wetland_id = wetlands[[wet_id_col]],
+
+  frog_m_1  = c_d_1,
+  frog_m_2  = c_d_2,
+  frog_m_3  = c_d_3,
+
+  burrow_m_1    = b_d_1,
+  burrow_m_2    = b_d_2,
+  burrow_m_3    = b_d_3,
+
+  ratio_b_to_f_1 = r_1,
+  ratio_b_to_f_2 = r_2,
+  ratio_b_to_f_3 = r_3
+)
+
+# Preview & save
+print(nearest_summary, n = 10)
+readr::write_csv(nearest_summary, "wetlands_nearest_cleaning_burrows_ratios.csv")
+
+```
+
