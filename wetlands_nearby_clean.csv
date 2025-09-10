@@ -1,0 +1,56 @@
+"Site","WetlandID","Count_500","Count_1000","Count_1500"
+"ARWMA","3",1,6,8
+"ARWMA","4",3,6,13
+"ARWMA","8",5,8,14
+"ARWMA","10",3,9,13
+"ARWMA","15",2,7,11
+"ARWMA","18",1,4,11
+"ARWMA","20",3,9,16
+"ARWMA","23",9,16,29
+"ARWMA","29",6,17,39
+"ARWMA","30",6,25,37
+"ARWMA","31",6,22,38
+"ARWMA","32",8,23,44
+"ARWMA","34",9,23,34
+"ARWMA","39",16,23,32
+"ARWMA","41",10,25,30
+"ARWMA","42",11,21,29
+"ARWMA","43",2,4,17
+"Cabin Bluff","170",3,11,19
+"Cabin Bluff","183",5,14,21
+"Cabin Bluff","184",2,13,20
+"Cabin Bluff","189",7,19,23
+"Cabin Bluff","290",8,18,27
+"Ceylon","22",7,14,30
+"Ceylon","37",16,23,30
+"Ceylon","41",10,25,30
+"Ceylon","54",9,22,31
+"Ceylon","55",5,7,13
+"Ceylon","59",5,11,21
+"Ceylon","60",3,8,19
+"Ceylon","62",4,10,17
+"Ceylon","69",3,13,23
+"Ceylon","109",3,9,18
+"Ceylon","127",7,22,36
+"Cabin Bluff","179",8,19,28
+"Ceylon","41B",1,6,14
+"Ceylon","109B",3,6,17
+"Jones Center","15",2,7,11
+"Jones Center","21",5,8,9
+"Jones Center","37",16,23,30
+"Jones Center","39",16,23,32
+"Jones Center","40",15,25,33
+"Jones Center","41",10,25,30
+"Jones Center","42",11,21,29
+"Jones Center","46",8,15,21
+"Jones Center","49",7,13,19
+"Jones Center","50",5,11,15
+"Jones Center","51",1,1,11
+"Jones Center","53",3,4,6
+"Jones Center","55",5,7,13
+"Ceylon","69B",2,8,22
+"TWMA","Cutgrass",0,2,7
+"TWMA","Deadwood",5,12,16
+"TWMA","Millfoil",4,9,17
+"TWMA","Plum Orchard",6,13,17
+"TWMA","Snot Bonnet",3,13,20

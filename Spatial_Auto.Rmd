@@ -1,0 +1,187 @@
+---
+---
+title: "Spatial_Auto"
+author: "Eva Kerr"
+date: "2025-09-10"
+output: html_document
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+library(sf)
+library(dplyr)
+library(stringr)
+library(readr)
+library(spdep)
+```
+
+```{r}
+# 1) Study wetlands list for Jones
+wetland <- read_csv("wetland_management.csv") |>
+  select(Site, WetlandID) |>
+  filter(Site == "Jones Center Ichauway")
+
+wetland_ids <- as.character(wetland$WetlandID)
+
+# 2) Read full Jones shapefile
+jones_all <- st_read("all_jones.shp", quiet = TRUE)
+
+# 3) Strip "W" from shapefile IDs and coerce to character
+jones_all <- jones_all |>
+  mutate(WetlandID_clean = as.character(str_remove(as.character(WetlandID), "^W")))
+
+# 4) Subset to study wetlands
+jones_study <- jones_all |>
+  filter(WetlandID_clean %in% wetland_ids) |>
+  select(-WetlandID) |>
+  rename(WetlandID = WetlandID_clean) |>
+  mutate(WetlandID = as.character(WetlandID),
+         Site = "Jones Center Ichauway")
+
+st_write(jones_study, "jones_study_wetlands.shp", delete_layer = TRUE, quiet = TRUE)
+
+
+
+```
+
+```{r}
+# If you saved to exports/, use that path
+psi_post <- readRDS("psi_post_mean.rds")  # dims: [site, wetland, year] or [site, wetland]
+z_post   <- readRDS("z_post_mean.rds")
+wet_index <- readRDS("wet_index.rds")
+nWetlands_vec <- readRDS("nWetlands_vec.rds")
+
+# Handle case where psi/z are 4D [site, wetland, month, year]
+if (length(dim(psi_post)) == 4) {
+  psi_post <- apply(psi_post, c(1,2,4), mean)
+  z_post   <- apply(z_post,   c(1,2,4), mean)
+}
+
+# Wetland-level residuals: mean over years of (z - psi)
+res_wet <- z_post - psi_post                  # [site, wetland, year]
+res_wet_mean <- apply(res_wet, c(1,2), mean)  # [site, wetland]
+
+```
+
+```{r}
+# Read study shapefiles
+ceylon_study <- st_read("ceylon_wetlands_subset.shp") |>
+  mutate(WetlandID = as.character(WetlandID),
+         Site = "Ceylon WMA")
+
+jones_study <- st_read("jones_study_wetlands.shp") |>
+  mutate(WetlandID = as.character(WetlandID))  # Site already added above
+
+# Choose a projected CRS in meters (replace with your real EPSG)
+proj_crs_ceylon <- 26917  # NAD83 / UTM zone 17N
+proj_crs_jones  <- 26916  # NAD83 / UTM zone 16N
+
+
+# Project BEFORE centroids to avoid distortion
+ceylon_study_m <- st_transform(ceylon_study, proj_crs_ceylon)
+jones_study_m  <- st_transform(jones_study,  proj_crs_jones)
+
+
+# Centroids (safe for points or polygons)
+ceylon_cent <- st_centroid(ceylon_study_m)
+jones_cent  <- st_centroid(jones_study_m)
+
+# Bring in WetID order from the analysis
+wet_index_ceylon <- wet_index |>
+  filter(Site == "Ceylon WMA") |>
+  arrange(WetID) |>
+  transmute(WetlandID = as.character(WetlandID), WetID)
+
+wet_index_jones <- wet_index |>
+  filter(Site == "Jones Center Ichauway") |>
+  arrange(WetID) |>
+  transmute(WetlandID = as.character(WetlandID), WetID)
+
+# Align centroids to WetID order
+ceylon_cent <- ceylon_cent |>
+  inner_join(wet_index_ceylon, by = "WetlandID") |>
+  arrange(WetID)
+
+jones_cent <- jones_cent |>
+  inner_join(wet_index_jones, by = "WetlandID") |>
+  arrange(WetID)
+
+stopifnot(nrow(ceylon_cent) == nWetlands_vec[1])
+stopifnot(nrow(jones_cent)  == nWetlands_vec[2])
+
+coords_ceylon <- st_coordinates(ceylon_cent)
+coords_jones  <- st_coordinates(jones_cent)
+
+# Residual vectors in WetID order
+res_ceylon <- as.numeric(res_wet_mean[1, 1:nrow(ceylon_cent)])
+res_jones  <- as.numeric(res_wet_mean[2, 1:nrow(jones_cent)])
+
+```
+
+```{r}
+check_moran <- function(coords, values, d0) {
+  nb <- dnearneigh(coords, d1 = 0, d2 = d0)
+  # Connect isolates to nearest neighbor if any
+  if (any(card(nb) == 0)) {
+    nb_knn <- knearneigh(coords, k = 1)
+    nb2 <- knn2nb(nb_knn)
+    nb <- mapply(function(a,b) sort(unique(c(a,b))), nb, nb2, SIMPLIFY = FALSE)
+    class(nb) <- "nb"
+  }
+  lw <- nb2listw(nb, style = "W", zero.policy = TRUE)
+  moran.mc(values, lw, nsim = 999, zero.policy = TRUE)
+}
+
+radii <- c(500, 1000, 1500)
+
+cat("— Ceylon WMA —\n")
+for (d0 in radii) {
+  mi <- check_moran(coords_ceylon, res_ceylon, d0)
+  cat(sprintf("d0=%4dm : Moran's I = % .3f   p = %.3f\n", d0, mi$statistic, mi$p.value))
+}
+
+cat("\n— Jones Center —\n")
+for (d0 in radii) {
+  mi <- check_moran(coords_jones, res_jones, d0)
+  cat(sprintf("d0=%4dm : Moran's I = % .3f   p = %.3f\n", d0, mi$statistic, mi$p.value))
+}
+
+```
+
+```{r}
+## ---- maps-residuals, message=FALSE, warning=FALSE ---------------------------
+library(ggplot2)
+
+# 1) Attach residuals to centroids
+ceylon_cent$residual <- res_ceylon
+jones_cent$residual  <- res_jones
+
+# 2) Combine for a single faceted plot (keeps geometries)
+ceylon_cent$SiteName <- "Ceylon WMA"
+jones_cent$SiteName  <- "Jones Center Ichauway"
+both_cent <- rbind(
+  ceylon_cent[, c("residual", "SiteName", "geometry")],
+  jones_cent[, c("residual", "SiteName", "geometry")]
+)
+
+# 3) Standardize residuals for a common color scale (z-scores)
+both_cent$res_z <- scale(both_cent$residual)[,1]
+
+# 4) Plot: faceted maps with the same color scale across sites
+ggplot(both_cent) +
+  geom_sf(aes(color = res_z), size = 2) +
+  scale_color_gradient2(
+    name = "Residual (z)",
+    low = "#4575b4", mid = "white", high = "#d73027",
+    midpoint = 0, limits = c(min(both_cent$res_z, na.rm=TRUE),
+                             max(both_cent$res_z, na.rm=TRUE))
+  ) +
+  facet_wrap(~ SiteName) +
+  coord_sf() +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.major = element_line(size = 0.2),
+        legend.position = "right") +
+  labs(title = "Wetland-level residuals (mean over years of z − ψ)",
+       subtitle = "Red = higher-than-fitted, Blue = lower-than-fitted")
+
+```
+

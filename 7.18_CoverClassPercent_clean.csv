@@ -1,0 +1,184 @@
+Site,VegType,WetlandID,SiteWet,area_total,area_m2,CovPercent
+Alapaha River WMA,herb,10,ARWMA_10,36427.23,17639.69,48.42
+Alapaha River WMA,water,43,ARWMA_43,47558.29,3773.53,7.93
+Alapaha River WMA,shrub,29,ARWMA_29,7113.89,3552.17,49.93
+Alapaha River WMA,sparse,32,ARWMA_32,10959.67,1202.09,10.97
+Alapaha River WMA,herb,22,ARWMA_22,2899.72,209.13,7.21
+Alapaha River WMA,herb,34,ARWMA_34,19633.19,17928.46,91.32
+Alapaha River WMA,herb,4,ARWMA_4,7448.27,3152.17,42.32
+Alapaha River WMA,herb,29,ARWMA_29,7113.89,511.28,7.19
+Alapaha River WMA,sparse,15,ARWMA_15,16558.17,325.1,1.96
+Alapaha River WMA,tree,34,ARWMA_34,19633.19,6923.48,35.26
+Alapaha River WMA,shrub,40,ARWMA_40,12236.5,142.19,1.16
+Alapaha River WMA,tree,39,ARWMA_39,5165.61,1986.18,38.45
+Alapaha River WMA,tree,10,ARWMA_10,36427.23,10155.24,27.88
+Alapaha River WMA,water,20,ARWMA_20,17152.95,25.43,0.15
+Alapaha River WMA,water,42,ARWMA_42,18746.31,14339.2,76.49
+Alapaha River WMA,herb,3,ARWMA_3,62742.7,13468.01,21.47
+Alapaha River WMA,sparse,8,ARWMA_8,25279.43,1.72,0.01
+Alapaha River WMA,herb,30,ARWMA_30,13850.43,5167.94,37.31
+Alapaha River WMA,tree,8,ARWMA_8,25279.43,11298.03,44.69
+Alapaha River WMA,herb,32,ARWMA_32,10959.67,429.78,3.92
+Alapaha River WMA,tree,41,ARWMA_41,4460.32,4440.45,99.55
+Alapaha River WMA,tree,40,ARWMA_40,12236.5,11207.64,91.59
+Alapaha River WMA,herb,18,ARWMA_18,15941.65,3798.93,23.83
+Alapaha River WMA,shrub,32,ARWMA_32,10959.67,281.61,2.57
+Alapaha River WMA,shrub,43,ARWMA_43,47558.29,2952.56,6.21
+Alapaha River WMA,tree,23,ARWMA_23,13345.19,12787.19,95.82
+Alapaha River WMA,herb,43,ARWMA_43,47558.29,17640.03,37.09
+Alapaha River WMA,tree,32,ARWMA_32,10959.67,7849.41,71.62
+Alapaha River WMA,herb,39,ARWMA_39,5165.61,573.56,11.1
+Alapaha River WMA,shrub,42,ARWMA_42,18746.31,2814.81,15.02
+Alapaha River WMA,tree,43,ARWMA_43,47558.29,25552.07,53.73
+Alapaha River WMA,herb,8,ARWMA_8,25279.43,7786.7,30.8
+Alapaha River WMA,tree,30,ARWMA_30,13850.43,4821.05,34.81
+Alapaha River WMA,shrub,31,ARWMA_31,26710.13,1752.46,6.56
+Alapaha River WMA,shrub,8,ARWMA_8,25279.43,7819.37,30.93
+Alapaha River WMA,tree,15,ARWMA_15,16558.17,7861.44,47.48
+Alapaha River WMA,shrub,20,ARWMA_20,17152.95,2180.14,12.71
+Alapaha River WMA,tree,18,ARWMA_18,15941.65,12147.29,76.2
+Alapaha River WMA,shrub,10,ARWMA_10,36427.23,5507.22,15.12
+Alapaha River WMA,shrub,22,ARWMA_22,2899.72,586.11,20.21
+Alapaha River WMA,tree,31,ARWMA_31,26710.13,16782.57,62.83
+Alapaha River WMA,water,15,ARWMA_15,16558.17,389.58,2.35
+Alapaha River WMA,tree,42,ARWMA_42,18746.31,9861.58,52.61
+Alapaha River WMA,tree,22,ARWMA_22,2899.72,1873.01,64.59
+Alapaha River WMA,herb,40,ARWMA_40,12236.5,214.65,1.75
+Alapaha River WMA,shrub,15,ARWMA_15,16558.17,549.81,3.32
+Alapaha River WMA,tree,20,ARWMA_20,17152.95,4780.04,27.87
+Alapaha River WMA,water,34,ARWMA_34,19633.19,678.85,3.46
+Alapaha River WMA,tree,3,ARWMA_3,62742.7,48915.3,77.96
+Alapaha River WMA,sparse,10,ARWMA_10,36427.23,136.74,0.38
+Alapaha River WMA,water,39,ARWMA_39,5165.61,4319.26,83.62
+Alapaha River WMA,tree,29,ARWMA_29,7113.89,3152.18,44.31
+Alapaha River WMA,shrub,30,ARWMA_30,13850.43,1125.31,8.12
+Alapaha River WMA,herb,42,ARWMA_42,18746.31,342.73,1.83
+Alapaha River WMA,tree,4,ARWMA_4,7448.27,2506.91,33.66
+Alapaha River WMA,herb,31,ARWMA_31,26710.13,3178.73,11.9
+Alapaha River WMA,herb,15,ARWMA_15,16558.17,7034.4,42.48
+Alapaha River WMA,herb,20,ARWMA_20,17152.95,9875.24,57.57
+Alapaha River WMA,water,8,ARWMA_8,25279.43,25,0.1
+Cabin Bluff,tree,179,cabin bluff_179,18237.82,7129.1,39.09
+Cabin Bluff,shrub,170,cabin bluff_170,12024.46,788.88,6.56
+Cabin Bluff,herb,179,cabin bluff_179,18237.82,17811.34,97.66
+Cabin Bluff,shrub,290,cabin bluff_290,15131.83,86.1,0.57
+Cabin Bluff,tree,183,cabin bluff_183,1148.98,778.74,67.78
+Cabin Bluff,tree,184,cabin bluff_184,4499.3,2699.59,60
+Cabin Bluff,water,170,cabin bluff_170,12024.46,8827.43,73.41
+Cabin Bluff,shrub,184,cabin bluff_184,4499.3,1110.03,24.67
+Cabin Bluff,shrub,179,cabin bluff_179,18237.82,5454.73,29.91
+Cabin Bluff,tree,189,cabin bluff_189,2487.84,868.14,34.9
+Cabin Bluff,herb,189,cabin bluff_189,2487.84,2458.91,98.84
+Cabin Bluff,sparse,290,cabin bluff_290,15131.83,551.44,3.64
+Cabin Bluff,sparse,183,cabin bluff_183,1148.98,62.06,5.4
+Cabin Bluff,shrub,189,cabin bluff_189,2487.84,737.5,29.64
+Cabin Bluff,sparse,179,cabin bluff_179,18237.82,238.27,1.31
+Cabin Bluff,herb,183,cabin bluff_183,1148.98,230.34,20.05
+Cabin Bluff,sparse,184,cabin bluff_184,4499.3,247.98,5.51
+Cabin Bluff,herb,290,cabin bluff_290,15131.83,14248.28,94.16
+Cabin Bluff,tree,290,cabin bluff_290,15131.83,9081.75,60.02
+Cabin Bluff,shrub,183,cabin bluff_183,1148.98,146.89,12.78
+Cabin Bluff,herb,184,cabin bluff_184,4499.3,1052.51,23.39
+Cabin Bluff,herb,170,cabin bluff_170,12024.46,11894.63,98.92
+Cabin Bluff,tree,170,cabin bluff_170,12024.46,3689.92,30.69
+Ceylon WMA,tree,41,Ceylon_41,15737.52,15147.26,96.25
+Ceylon WMA,herb,54,Ceylon_54,14903.34,9530.79,63.95
+Ceylon WMA,tree,55,Ceylon_55,8874.75,2065.02,23.27
+Ceylon WMA,herb,41,Ceylon_41,15737.52,15363.82,97.63
+Ceylon WMA,water,109B,Ceylon_109B,2291.62,168.2,7.34
+Ceylon WMA,tree,22,Ceylon_22,7451.97,3813.51,51.17
+Ceylon WMA,tree,109,Ceylon_109,8742.21,3199.25,36.6
+Ceylon WMA,herb,109,Ceylon_109,8742.21,8367.12,95.71
+Ceylon WMA,herb,69B,Ceylon_69B,273.53,30.12,11.01
+Ceylon WMA,herb,109B,Ceylon_109B,2291.62,281.07,12.27
+Ceylon WMA,herb,37,Ceylon_37,25349.77,13248.83,52.26
+Ceylon WMA,tree,109B,Ceylon_109B,2291.62,1670.49,72.9
+Ceylon WMA,water,69B,Ceylon_69B,273.53,166.47,60.86
+Ceylon WMA,herb,41B,Ceylon_41B,204.73,25.08,12.25
+Ceylon WMA,tree,37,Ceylon_37,25349.77,20846.71,82.24
+Ceylon WMA,herb,62,Ceylon_62,7191.68,764.47,10.63
+Ceylon WMA,tree,41B,Ceylon_41B,204.73,10.05,4.91
+Ceylon WMA,herb,59,Ceylon_59,50916.54,19707.81,38.71
+Ceylon WMA,herb,69,Ceylon_69,15986.24,4943.87,30.93
+Ceylon WMA,tree,69,Ceylon_69,15986.24,10531.8,65.88
+Ceylon WMA,tree,59,Ceylon_59,50916.54,23368.38,45.9
+Ceylon WMA,tree,54,Ceylon_54,14903.34,11609.07,77.9
+Ceylon WMA,herb,55,Ceylon_55,8874.75,4078.06,45.95
+Ceylon WMA,tree,62,Ceylon_62,7191.68,5956.85,82.83
+Ceylon WMA,tree,69B,Ceylon_69B,273.53,173.79,63.54
+Ceylon WMA,herb,22,Ceylon_22,7451.97,3618.92,48.56
+Ceylon WMA,water,41B,Ceylon_41B,204.73,195.94,95.71
+Ceylon WMA,herb,127,Ceylon_127,10551.78,211.04,2
+Ceylon WMA,tree,60,Ceylon_60,4723,2188.69,46.31
+Ceylon WMA,herb,60,Ceylon_60,4723,2537.67,53.73
+Ceylon WMA,shrub,60,Ceylon_60,4723,0,0
+Ceylon WMA,water,60,Ceylon_60,4723,0,0
+Ceylon WMA,sparse,60,Ceylon_60,4723,737.73,15.62
+Ceylon WMA,tree,127,Ceylon_127,10551.78,6600.29,62.55
+Jones Center Ichauway,tree,49,Jones Center_49,43270.52,4129.51,9.54
+Jones Center Ichauway,tree,39,Jones Center_39,11997.45,5228.85,43.58
+Jones Center Ichauway,herb,42,Jones Center_42,22834.93,22773.14,99.73
+Jones Center Ichauway,shrub,42,Jones Center_42,22834.93,4490.87,19.67
+Jones Center Ichauway,shrub,49,Jones Center_49,43270.52,2864.49,6.62
+Jones Center Ichauway,shrub,53,Jones Center_53,31543.86,7031.1,22.29
+Jones Center Ichauway,tree,37,Jones Center_37,8897.19,2308.28,25.94
+Jones Center Ichauway,herb,39,Jones Center_39,11997.45,11939.01,99.51
+Jones Center Ichauway,sparse,49,Jones Center_49,43270.52,806.54,1.86
+Jones Center Ichauway,herb,53,Jones Center_53,31543.86,31409.77,99.57
+Jones Center Ichauway,shrub,50,Jones Center_50,57626.22,2108.04,3.66
+Jones Center Ichauway,shrub,39,Jones Center_39,11997.45,698.53,5.82
+Jones Center Ichauway,water,37,Jones Center_37,8897.19,1983.96,22.3
+Jones Center Ichauway,herb,49,Jones Center_49,43270.52,42631.56,98.52
+Jones Center Ichauway,tree,15,Jones Center_15,195610.65,49033.91,25.07
+Jones Center Ichauway,shrub,15,Jones Center_15,195610.65,8510.5,4.35
+Jones Center Ichauway,shrub,46,Jones Center_46,101401.36,8910.82,8.79
+Jones Center Ichauway,tree,50,Jones Center_50,57626.22,1377.55,2.39
+Jones Center Ichauway,herb,21,Jones Center_21,95887.44,70362.91,73.38
+Jones Center Ichauway,shrub,37,Jones Center_37,8897.19,366.09,4.11
+Jones Center Ichauway,herb,40,Jones Center_40,14546.06,14495.79,99.65
+Jones Center Ichauway,shrub,40,Jones Center_40,14546.06,190.82,1.31
+Jones Center Ichauway,shrub,51,Jones Center_51,7307.16,1250.85,17.12
+Jones Center Ichauway,herb,51,Jones Center_51,7307.16,7263.82,99.41
+Jones Center Ichauway,herb,37,Jones Center_37,8897.19,8883.96,99.85
+Jones Center Ichauway,tree,51,Jones Center_51,7307.16,225.05,3.08
+Jones Center Ichauway,herb,46,Jones Center_46,101401.36,101130.36,99.73
+Jones Center Ichauway,tree,40,Jones Center_40,14546.06,10863.09,74.68
+Jones Center Ichauway,sparse,46,Jones Center_46,101401.36,279.86,0.28
+Jones Center Ichauway,tree,21,Jones Center_21,95887.44,5779.28,6.03
+Jones Center Ichauway,water,53,Jones Center_53,31543.86,1044.27,3.31
+Jones Center Ichauway,water,42,Jones Center_42,22834.93,2288.83,10.02
+Jones Center Ichauway,tree,55,Jones Center_55,36314.5,1547.8,4.26
+Jones Center Ichauway,tree,53,Jones Center_53,31543.86,1419.68,4.5
+Jones Center Ichauway,tree,41,Jones Center_41,5364.08,3337.41,62.22
+Jones Center Ichauway,herb,15,Jones Center_15,195610.65,169418.35,86.61
+Jones Center Ichauway,tree,42,Jones Center_42,22834.93,3581.44,15.68
+Jones Center Ichauway,sparse,21,Jones Center_21,95887.44,25859.63,26.97
+Jones Center Ichauway,water,46,Jones Center_46,101401.36,509.13,0.5
+Jones Center Ichauway,herb,55,Jones Center_55,36314.5,36049.37,99.27
+Jones Center Ichauway,shrub,55,Jones Center_55,36314.5,11480.64,31.61
+Jones Center Ichauway,shrub,21,Jones Center_21,95887.44,822,0.86
+Jones Center Ichauway,herb,50,Jones Center_50,57626.22,57353.78,99.53
+Jones Center Ichauway,water,51,Jones Center_51,7307.16,3432.08,46.97
+Jones Center Ichauway,sparse,55,Jones Center_55,36314.5,1381.06,3.8
+Jones Center Ichauway,herb,41,Jones Center_41,5364.08,5350.84,99.75
+Jones Center Ichauway,shrub,41,Jones Center_41,5364.08,147.72,2.75
+Jones Center Ichauway,tree,46,Jones Center_46,101401.36,10019.42,9.88
+Jones Center Ichauway,water,50,Jones Center_50,57626.22,455.66,0.79
+Jones Center Ichauway,water,49,Jones Center_49,43270.52,282.7,0.65
+Jones Center Ichauway,sparse,37,Jones Center_37,8897.19,177.54,2
+Townsend WMA,herb,Snot Bonnet,townsend_snotbonnet,3210.28,3181.73,99.11
+Townsend WMA,shrub,Milfoil,townsend_millfoil,2317.78,355.67,15.35
+Townsend WMA,tree,Snot Bonnet,townsend_snotbonnet,3210.28,1302.71,40.58
+Townsend WMA,herb,Plum Orchard,townsend_plumorchar,1530.18,1520.44,99.36
+Townsend WMA,tree,Deadwood,townsend_deadwood,42470.53,18518.21,43.6
+Townsend WMA,shrub,Plum Orchard,townsend_plumorchar,1530.18,37.94,2.48
+Townsend WMA,shrub,Cutgrass,townsend_cutgrass,2719.52,440.41,16.19
+Townsend WMA,herb,Deadwood,townsend_deadwood,42470.53,42205.14,99.38
+Townsend WMA,shrub,Snot Bonnet,townsend_snotbonnet,3210.28,355.88,11.09
+Townsend WMA,herb,Milfoil,townsend_millfoil,2317.78,2302.44,99.34
+Townsend WMA,tree,Plum Orchard,townsend_plumorchar,1530.18,64.25,4.2
+Townsend WMA,tree,Milfoil,townsend_millfoil,2317.78,531.2,22.92
+Townsend WMA,herb,Cutgrass,townsend_cutgrass,2719.52,2703.19,99.4
+Townsend WMA,shrub,Deadwood,townsend_deadwood,42470.53,3163.05,7.45
+Townsend WMA,sparse,Millfoil,townsend_millfoil,2317.78,12.7,0.55
+Townsend WMA,tree,Cutgrass,townsend_cutgrass,2719.52,1304.67,47.97

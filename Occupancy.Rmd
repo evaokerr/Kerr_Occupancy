@@ -23,7 +23,7 @@ call_data      <- read.csv("long_all_call_data_2021_2024.csv")
 dip_data       <- read.csv("DipnetData2019_2025clean.csv")
 hydro_data     <- read.csv("WetlandHydroperiod_2024_EK.csv")
 wet_near_data  <- read.csv("wetlands_nearby_clean.csv")
-ratio_data     <- read.csv("wetlands_nearest_cleaning_burrows_ratios.csv")  # must contain Site, WetlandID, ratio_1_f_to_b
+ratio_data     <- read.csv("ratio_b_tof_1.csv")  # must contain Site, WetlandID, ratio_1_f_to_b
 
 ```
 
@@ -55,6 +55,11 @@ habitat_data  <- habitat_data %>% filter(Site %in% keep_sites)
 hydro_data    <- hydro_data   %>% filter(Site %in% keep_sites)
 wet_near_data <- wet_near_data%>% filter(Site %in% keep_sites)
 ratio_data    <- ratio_data   %>% filter(Site %in% keep_sites)
+
+# Standardize column name to match the rest of the pipeline
+if ("wetland_id" %in% names(ratio_data) && !("WetlandID" %in% names(ratio_data))) {
+  ratio_data <- ratio_data %>% rename(WetlandID = wetland_id)
+}
 
 # Subset to study wetlands only (Site+WetlandID present in hydro)
 key_h <- hydro_data %>% distinct(Site, WetlandID)
@@ -150,17 +155,33 @@ for (j in seq_len(nSites)) {
   if (nrow(ss)) nNearby_05[j, ss$WetID] <- ss$Count_500
 }
 
+# ----- Ratio covariate (observed only at Ceylon) -----
+# Make sure the column names match your CSV (adjust 'ratio_b_to_f_1' if needed)
 ratio_pre <- ratio_data %>%
-  select(Site, wetland_id, ratio_b_to_f_1) %>%
-  rename(WetlandID = wetland_id) %>%        
+  select(Site, WetlandID, ratio_b_to_f_1) %>%    # <- check this name in your CSV
   inner_join(wet_index, by = c("Site","WetlandID"))
 
-
+# Fill matrix with NA where unavailable
 ratio_mat <- matrix(NA_real_, nSites, maxWetlands)
 for (j in seq_len(nSites)) {
   ss <- ratio_pre %>% filter(Site == site_levels[j])
-  if (nrow(ss)) ratio_mat[j, ss$WetID] <- as.numeric(ss$ratio_1_f_to_b)
+  if (nrow(ss)) ratio_mat[j, ss$WetID] <- as.numeric(ss$ratio_b_to_f_1)
 }
+
+# Indicator of availability (1 = observed at this site/wetland, 0 = missing)
+ratio_obs <- ifelse(is.na(ratio_mat), 0L, 1L)
+
+# Scale using only observed values (global z-score across all observed entries)
+ratio_vec <- as.numeric(ratio_mat)
+ratio_mean <- mean(ratio_vec, na.rm = TRUE)
+ratio_sd   <- sd(ratio_vec,   na.rm = TRUE)
+if (is.na(ratio_sd) || ratio_sd == 0) ratio_sd <- 1  # safety for tiny samples
+
+ratio_sc <- (ratio_mat - ratio_mean) / ratio_sd
+
+# Replace NAs with 0 AFTER scaling so missing cells contribute 0 to the linear predictor
+ratio_sc0 <- ratio_sc
+ratio_sc0[is.na(ratio_sc0)] <- 0
 
 # Safe scaling helper
 safe_scale_mat <- function(M) {
@@ -173,7 +194,7 @@ safe_scale_mat <- function(M) {
 canopy_sc    <- safe_scale_mat(canopy)
 hydro_sc     <- safe_scale_mat(hydro)
 nNearby_sc   <- safe_scale_mat(nNearby_05)
-ratio_sc     <- safe_scale_mat(ratio_mat)
+
 
 ```
 
@@ -227,7 +248,7 @@ cov_na_to0 <- function(M) { M[is.na(M)] <- 0; M }
 canopy_sc  <- cov_na_to0(canopy_sc)
 hydro_sc   <- cov_na_to0(hydro_sc)
 nNearby_sc <- cov_na_to0(nNearby_sc)
-ratio_sc   <- cov_na_to0(ratio_sc)
+
 
 data_list <- list(
   nSites = nSites,
@@ -240,12 +261,14 @@ data_list <- list(
   canopy = canopy_sc,
   hydro  = hydro_sc,
   dist   = nNearby_sc,
-  ratio  = ratio_sc,
+  ratio  = ratio_sc0,     # scaled, with NAs replaced by 0
+  ratio_obs = ratio_obs,  # 0/1 mask of availability
   y_dip = y_dip,
   y_call = y_call,
   effort_dip  = effort_dip,
   effort_call = effort_call
 )
+
 
 ```
 
@@ -285,12 +308,13 @@ model{
     for(w in 1:nWetlands[j]){
       for(t in 1:nYear){
 
-        logit(psi[j,w,t]) <- alpha0
-                            + land_re[landscape[j]]
-                            + alpha_canopy * canopy[j,w]
-                            + alpha_hydro  * hydro[j,w]
-                            + alpha_dist   * dist[j,w]
-                            + alpha_ratio  * ratio[j,w]
+logit(psi[j,w,t]) <- alpha0
+                    + land_re[landscape[j]]
+                    + alpha_canopy * canopy[j,w]
+                    + alpha_hydro  * hydro[j,w]
+                    + alpha_dist   * dist[j,w]
+                    + alpha_ratio  * ratio[j,w] * ratio_obs[j,w]   
+
 
         z[j,w,t] ~ dbern(psi[j,w,t])
 
@@ -344,7 +368,7 @@ inits_fun <- function(){
 params <- c(
   "alpha0","alpha_canopy","alpha_hydro","alpha_dist","alpha_ratio",
   "land_re","beta0_dip","beta0_call","beta_mon_dip","beta_mon_call",
-  "beta_yr_dip","beta_yr_call","occ_prop"
+  "beta_yr_dip","beta_yr_call","occ_prop","psi","z"
 )
 
 fit <- jagsUI::jags(
@@ -369,5 +393,14 @@ list(
   neff_lt_400  = low_neff
 )
 
+```
+
+```{r}
+saveRDS(psi_post, file = "psi_post_mean.rds")
+saveRDS(z_post,   file = "z_post_mean.rds")
+
+# (Optional) also save helper objects needed by the spatial RMD
+saveRDS(wet_index,       file = "wet_index.rds")
+saveRDS(nWetlands_vec,   file = "nWetlands_vec.rds")
 ```
 

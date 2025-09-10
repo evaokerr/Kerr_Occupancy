@@ -281,3 +281,20 @@ readr::write_csv(nearest_summary, "wetlands_nearest_cleaning_burrows_ratios.csv"
 
 ```
 
+```{r}
+# ---- Create simplified ratio dataset with Site ----
+ratio_b_tof_1 <- nearest_summary %>%
+  select(wetland_id, ratio_b_to_f_1) %>%
+  mutate(
+    ratio_b_to_f_1 = ifelse(ratio_b_to_f_1 > 1, 1, ratio_b_to_f_1),
+    Site = "Ceylon WMA"
+  )
+
+# Preview
+print(ratio_b_tof_1, n = 10)
+
+# Save to CSV
+readr::write_csv(ratio_b_tof_1, "ratio_b_tof_1.csv")
+
+```
+
