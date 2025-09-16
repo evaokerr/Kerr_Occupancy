@@ -149,22 +149,31 @@ for (d0 in radii) {
 
 ```{r}
 ## ---- maps-residuals, message=FALSE, warning=FALSE ---------------------------
+library(sf)
 library(ggplot2)
 
+# Force a common projected CRS in meters (CONUS Albers)
+target_crs <- 5070
+
+# Reproject BOTH centroid layers to the same CRS
+ceylon_cent_c <- st_transform(ceylon_cent, target_crs)
+jones_cent_c  <- st_transform(jones_cent,  target_crs)
+
 # 1) Attach residuals to centroids
-ceylon_cent$residual <- res_ceylon
-jones_cent$residual  <- res_jones
+ceylon_cent_c$residual <- res_ceylon
+jones_cent_c$residual  <- res_jones
 
 # 2) Combine for a single faceted plot (keeps geometries)
-ceylon_cent$SiteName <- "Ceylon WMA"
-jones_cent$SiteName  <- "Jones Center Ichauway"
+ceylon_cent_c$SiteName <- "Ceylon WMA"
+jones_cent_c$SiteName  <- "Jones Center Ichauway"
+
 both_cent <- rbind(
-  ceylon_cent[, c("residual", "SiteName", "geometry")],
-  jones_cent[, c("residual", "SiteName", "geometry")]
+  ceylon_cent_c[, c("residual", "SiteName", "geometry")],
+  jones_cent_c[,  c("residual", "SiteName", "geometry")]
 )
 
 # 3) Standardize residuals for a common color scale (z-scores)
-both_cent$res_z <- scale(both_cent$residual)[,1]
+both_cent$res_z <- as.numeric(scale(both_cent$residual))
 
 # 4) Plot: faceted maps with the same color scale across sites
 ggplot(both_cent) +
@@ -172,8 +181,7 @@ ggplot(both_cent) +
   scale_color_gradient2(
     name = "Residual (z)",
     low = "#4575b4", mid = "white", high = "#d73027",
-    midpoint = 0, limits = c(min(both_cent$res_z, na.rm=TRUE),
-                             max(both_cent$res_z, na.rm=TRUE))
+    midpoint = 0
   ) +
   facet_wrap(~ SiteName) +
   coord_sf() +
