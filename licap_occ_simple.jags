@@ -1,0 +1,69 @@
+
+model{
+
+  # Priors
+  alpha0        ~ dnorm(0, 0.5)
+  alpha_canopy  ~ dnorm(0, 0.5)
+  alpha_hydro   ~ dnorm(0, 0.5)
+  alpha_dist    ~ dnorm(0, 0.5)
+  alpha_ratio   ~ dnorm(0, 0.5)
+
+  tau_land ~ dgamma(0.1, 0.1)
+  for(l in 1:nLand){
+    land_re[l] ~ dnorm(0, tau_land)
+  }
+
+  beta0_dip  ~ dnorm(0, 0.5)
+  beta0_call ~ dnorm(0, 0.5)
+  beta0_egg  ~ dnorm(0, 0.5)   # NEW
+
+  pr_dip  ~ dexp(1)
+  pr_call ~ dexp(1)
+  pr_egg  ~ dexp(1)            # NEW
+
+  for(m in 1:nMonths){
+    beta_mon_dip[m]  ~ dnorm(0, pr_dip)
+    beta_mon_call[m] ~ dnorm(0, pr_call)
+    beta_mon_egg[m]  ~ dnorm(0, pr_egg)  # NEW
+  }
+  for(t in 1:nYear){
+    beta_yr_dip[t]   ~ dnorm(0, pr_dip)
+    beta_yr_call[t]  ~ dnorm(0, pr_call)
+    beta_yr_egg[t]   ~ dnorm(0, pr_egg)  # NEW
+  }
+
+  # Ecological & observation processes (single species)
+  for(j in 1:nSites){
+    for(w in 1:nWetlands[j]){
+      for(t in 1:nYear){
+
+logit(psi[j,w,t]) <- alpha0
+                    + land_re[landscape[j]]
+                    + alpha_canopy * canopy[j,w]
+                    + alpha_hydro  * hydro[j,w]
+                    + alpha_dist   * dist[j,w]
+                    + alpha_ratio  * ratio[j,w] * ratio_obs[j,w]
+
+        z[j,w,t] ~ dbern(psi[j,w,t])
+
+        for(m in 1:nMonths){
+          logit(p_dip[j,w,m,t])  <- beta0_dip  + beta_mon_dip[m]  + beta_yr_dip[t]
+          logit(p_call[j,w,m,t]) <- beta0_call + beta_mon_call[m] + beta_yr_call[t]
+          logit(p_egg[j,w,m,t])  <- beta0_egg  + beta_mon_egg[m]  + beta_yr_egg[t]  # NEW
+
+          y_dip[j,w,m,t]  ~ dbern(z[j,w,t] * p_dip[j,w,m,t]  * effort_dip[j,w,m,t])
+          y_call[j,w,m,t] ~ dbern(z[j,w,t] * p_call[j,w,m,t] * effort_call[j,w,m,t])
+          y_egg[j,w,m,t]  ~ dbern(z[j,w,t] * p_egg[j,w,m,t]  * effort_egg[j,w,m,t])  # NEW
+        }
+      }
+    }
+  }
+
+  # Derived: site-year occupancy proportion
+  for(j in 1:nSites){
+    for(t in 1:nYear){
+      occ_count[j,t] <- sum(z[j,1:nWetlands[j],t])
+      occ_prop[j,t]  <- occ_count[j,t] / nWetlands[j]
+    }
+  }
+}

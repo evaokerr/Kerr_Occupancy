@@ -1,0 +1,128 @@
+---
+title: "Egg clean up"
+author: "Eva Kerr"
+date: "2025-09-16"
+output: html_document
+---
+
+```{r}
+# ---- Clean Jones egg-mass data -> Rana capito detection (minimal columns) ----
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(readr)
+library(lubridate)
+
+egg_raw <- readr::read_csv("combined_egg_mass_data_2023_2024.csv",
+                           guess_max = 5000, show_col_types = FALSE)
+
+# 1) Normalize header names (lowercase, trim, collapse spaces)
+nm <- names(egg_raw)
+nm <- str_replace_all(nm, "\\s+", " ")
+nm <- str_trim(nm)
+nm <- str_to_lower(nm)
+names(egg_raw) <- nm
+
+# 2) Rename species/count columns to species_1..5 and count_1..5
+egg <- egg_raw %>%
+  rename_with(~ str_replace(., "^species (\\d+)$", "species_\\1")) %>%
+  rename_with(~ str_replace(., "^species (\\d+) number of egg masses$", "count_\\1"))
+
+# 3) Parse date robustly (try 'date', else pull date part from 'date and time')
+#    Handles ymd / mdy in 'date'; and ymd_hms / mdy_hms in 'date and time'
+date_from_date <- suppressWarnings(ymd(egg$date))
+date_from_date <- ifelse(is.na(date_from_date),
+                         as.character(suppressWarnings(mdy(egg$date))),
+                         as.character(date_from_date))
+date_from_date <- as.Date(date_from_date)
+
+dt_col <- egg[["date and time"]]
+date_from_dt <- suppressWarnings(as.Date(ymd_hms(dt_col)))
+if (all(is.na(date_from_dt))) {
+  date_from_dt <- suppressWarnings(as.Date(mdy_hms(dt_col)))
+}
+
+egg <- egg %>%
+  mutate(
+    date = coalesce(date_from_date, date_from_dt),
+    year = coalesce(as.integer(year), as.integer(format(date, "%Y"))),
+    wetlandid = str_remove(as.character(`wetland number`), "^\\s*[Ww]\\s*"),
+    site = "Jones Center Ichauway"
+  )
+
+# 4) Clean species/count fields
+egg2 <- egg %>%
+  mutate(
+    across(starts_with("species_"), ~ na_if(str_squish(.), "")),
+    across(starts_with("count_"), ~ suppressWarnings(as.numeric(.)))
+  )
+
+# 5) Long -> detect Rana capito (sum counts across slots), then 0/1 Detected
+capito_regex <- "(?i)\\b(rana\\s*capito|r\\.?\\s*capito)\\b"
+
+egg_long <- egg2 %>%
+  mutate(row_id = row_number()) %>%
+  pivot_longer(
+    cols = matches("^(species|count)_\\d+$"),
+    names_to  = c(".value","slot"),
+    names_sep = "_"
+  ) %>%
+  mutate(
+    species = str_squish(species),
+    is_capito = !is.na(species) & str_detect(species, capito_regex),
+    count = coalesce(as.numeric(count), 0)
+  ) %>%
+  filter(is_capito) %>%
+  group_by(row_id) %>%
+  summarise(EggMassCount = sum(count, na.rm = TRUE), .groups = "drop")
+
+egg_clean <- egg2 %>%
+  mutate(row_id = row_number()) %>%
+  left_join(egg_long, by = "row_id") %>%
+  mutate(
+    EggMassCount = coalesce(EggMassCount, 0),
+    Detected = as.integer(EggMassCount > 0),
+    month = factor(format(date, "%B"), levels = month.name)
+  ) %>%
+  select(site, wetlandid, date, year, month, Detected)
+
+# Quick check
+print(summary(egg_clean$date))
+print(table(egg_clean$Detected, useNA = "ifany"))
+
+# Save only the needed columns
+readr::write_csv(egg_clean, "egg_mass_clean_capito.csv")
+
+```
+```{r}
+library(dplyr)
+library(readr)
+
+egg_clean <- readr::read_csv("egg_mass_clean_capito.csv", show_col_types = FALSE)
+
+# 1) Exact list of detections (unique date–wetland pairs)
+det_list <- egg_clean %>%
+  filter(Detected == 1) %>%
+  distinct(date, wetlandid, site) %>%
+  arrange(date, wetlandid)
+
+print(det_list, n = Inf)   # show all rows
+
+
+
+# 2) Quick per-wetland summary (how many days, first/last detection)
+det_summary <- det_list %>%
+  group_by(wetlandid) %>%
+  summarise(
+    n_days = n_distinct(date),
+    first_detection = min(date),
+    last_detection  = max(date),
+    .groups = "drop"
+  ) %>%
+  arrange(wetlandid)
+
+print(det_summary, n = Inf)
+
+
+```
+
