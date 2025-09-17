@@ -808,7 +808,7 @@ xr <- range(post_month$Estimate, na.rm = TRUE)
 
 p_month_effect <- ggplot(post_month, aes(x = Estimate, y = Level, fill = after_stat(x))) +
   geom_density_ridges_gradient(scale = 1.6, rel_min_height = 0.01, size = 0.3) +
-  scale_fill_viridis_c(name = "Estimate", option = "C",
+  scale_fill_viridis_c(name = "Estimate", option = "D",
                        limits = xr, oob = scales::squish) +
   facet_wrap(~ Method, ncol = 2) +              # fixed scales across facets
   geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.4, colour = "grey40") +
@@ -874,7 +874,7 @@ xr <- range(post_month$Estimate, na.rm = TRUE)
 
 p_month_split <- ggplot(post_month, aes(x = Estimate, y = Month, fill = after_stat(x))) +
   geom_density_ridges_gradient(scale = 2, rel_min_height = 0.01, size = 0.3) +
-  scale_fill_viridis_c(name = "Estimate", option = "C",
+  scale_fill_viridis_c(name = "Estimate", option = "D",
                        limits = xr, oob = scales::squish) +
   facet_wrap(~ Method, ncol = 1) +
   geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.4, colour = "grey40") +
@@ -1074,7 +1074,7 @@ p_psi_wet <- ggplot(psi_wet, aes(x = WetlandID_f, y = med)) +
   labs(
     x = "Wetland ID",
     y = "Occupancy probability (ψ)",
-    title = paste0("Predicted occupancy by wetland — ", all_years[t_sel], " (ψ, not z)")
+    title = paste0("Predicted occupancy by wetland — ", all_years[t_sel])
   ) +
   theme_classic(base_size = 12) +
   theme(
@@ -1087,6 +1087,163 @@ print(p_psi_wet)
 
 ```
 
+```{r}
+library(dplyr); library(tidyr); library(ggplot2)
 
+# Posterior mean of z (probability of being occupied)
+z_mean <- apply(fit$sims.list$z, c(2,3,4), mean)  # [site, wetland, year]
+
+dimnames(z_mean) <- list(
+  Site = as.character(site_levels),
+  WetID = paste0("W", seq_len(dim(z_mean)[2])),
+  Year = as.character(all_years)
+)
+
+z_df <- as.data.frame.table(z_mean, responseName = "Pocc") %>%
+  mutate(WetID = as.integer(sub("^W","", WetID))) %>%
+  left_join(wet_index, by = c("Site","WetID")) %>%
+  filter(!is.na(WetlandID))
+
+ggplot(z_df, aes(x = Year, y = WetlandID, fill = Pocc)) +
+  geom_tile() +
+  scale_fill_viridis_c(name = "P(occupied)", option = "C", limits = c(0,1)) +
+  facet_wrap(~ Site, scales = "free_y") +
+  labs(x = NULL, y = "Wetland ID", title = "Latent occupancy (z)") +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid = element_blank())
+
+```
+```{r}
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(ggspatial)  
+library(maptiles)   # -> get_tiles()
+library(terra)      # raster backend for maptiles
+library(tidyterra)
+
+# Force knitr to write figure files to a normal folder during render
+knitr::opts_chunk$set(dev = "png", dpi = 300, fig.path = "fig-rmd/", fig.retina = 2, warning = FALSE, message = FALSE)
+options(bitmapType = "cairo")  # avoids Quartz hiccups on macOS
+# pick 2024 (or use yr_sel <- tail(all_years, 1) for latest)
+yr_sel <- "2024"
+z_wet <- z_df %>%
+  dplyr::filter(Year == yr_sel) %>%
+  dplyr::select(Site, WetID, WetlandID, Pocc)
+
+ceylon_study <- st_read("ceylon_wetlands_subset.shp", quiet = TRUE) %>%
+  mutate(WetlandID = as.character(WetlandID), Site = "Ceylon WMA")
+
+jones_study  <- st_read("jones_study_wetlands.shp", quiet = TRUE) %>%
+  mutate(WetlandID = as.character(WetlandID), Site = "Jones Center Ichauway")
+
+cey_boundary <- st_read("ceylon_boundary.shp", quiet = TRUE)
+if ("NAME" %in% names(cey_boundary)) {
+  cey_boundary <- cey_boundary %>% filter(toupper(NAME) == "CEYLON WMA")
+} else if ("Name" %in% names(cey_boundary)) {
+  cey_boundary <- cey_boundary %>% filter(toupper(Name) == "CEYLON WMA")
+} else stop("`ceylon_boundary.shp` must have NAME or Name field to filter on.")
+
+jon_boundary <- st_read("jones_land.shp", quiet = TRUE)
+
+```
+
+```{r}
+# --- Inputs expected already in workspace ---------------------------------
+# z_wet (Site, WetID, WetlandID, Pocc or similar)
+# ceylon_study (sf polygons), jones_study (sf polygons)
+# cey_boundary (sf; raw boundary), jon_boundary (sf)
+# yr_sel (character year like "2024")
+library(sf); library(dplyr); library(stringr)
+library(ggplot2)
+library(maptiles); library(terra); library(tidyterra)
+
+# 1) Canonicalize WetlandID and join P(occ) for the chosen year
+canon_id <- function(x) as.character(x) |> str_trim() |> str_replace("\\.0+$","") |> toupper()
+
+prob_col <- intersect(c("Pocc","med","z_mean","psi_mean","psi","p"), names(z_wet))[1]
+stopifnot(length(prob_col) == 1)
+
+zw <- z_wet |>
+  mutate(
+    Site = recode(as.character(Site),
+                  "Ceylon" = "Ceylon WMA",
+                  "Jones Center" = "Jones Center Ichauway",
+                  .default = as.character(Site)),
+    WetlandID = canon_id(WetlandID),
+    Pocc = pmin(pmax(.data[[prob_col]], 0), 1)
+  ) |>
+  select(Site, WetlandID, Pocc)
+
+cey_poly <- ceylon_study |> mutate(WetlandID = canon_id(WetlandID))
+jon_poly <- jones_study  |> mutate(WetlandID = canon_id(WetlandID))
+
+cey_poly_p <- cey_poly |> left_join(filter(zw, Site == "Ceylon WMA"),             by = "WetlandID")
+jon_poly_p <- jon_poly |> left_join(filter(zw, Site == "Jones Center Ichauway"), by = "WetlandID")
+
+# 2) Boundary prep — filter Ceylon by NAME and dissolve both to single-part outlines
+if ("NAME" %in% names(cey_boundary)) {
+  cey_boundary <- cey_boundary |> filter(toupper(NAME) == "CEYLON WMA")
+} else if ("Name" %in% names(cey_boundary)) {
+  cey_boundary <- cey_boundary |> filter(toupper(Name) == "CEYLON WMA")
+}
+
+dissolve_boundary <- function(x){
+  x |>
+    st_make_valid() |>
+    mutate(.grp = 1L) |>
+    group_by(.grp) |>
+    summarise(geometry = st_union(geometry), .groups = "drop") |>
+    select(-.grp)
+}
+cey_boundary_d <- dissolve_boundary(cey_boundary)
+jon_boundary_d <- dissolve_boundary(jon_boundary)
+
+# 3) Satellite map function (no max_tiles arg)
+site_satellite_map <- function(boundary_sf, wetlands_sf, title_txt,
+                               provider = "Esri.WorldImagery", zoom = 16) {
+  # Fetch tiles (Web Mercator), cropped to boundary bbox
+  r <- maptiles::get_tiles(boundary_sf, provider = provider, zoom = zoom,
+                           crop = TRUE, cachedir = "tile-cache")
+
+  # Reproject vectors to raster CRS and mask imagery to the exact boundary
+  wm_crs <- sf::st_crs(terra::crs(r, proj = TRUE))
+  boundary_wm <- sf::st_transform(boundary_sf, wm_crs)
+  wetlands_wm <- sf::st_transform(wetlands_sf, wm_crs)
+  r <- terra::mask(r, terra::vect(boundary_wm))
+
+  ggplot() +
+    tidyterra::geom_spatraster_rgb(data = r) +
+    # subtle halo so wetlands pop on imagery
+    geom_sf(data = wetlands_wm, color = "white", linewidth = 0.8, fill = NA) +
+    geom_sf(data = dplyr::filter(wetlands_wm, !is.na(Pocc)),
+            aes(fill = Pocc), color = "white", linewidth = 0.25) +
+    geom_sf(data = dplyr::filter(wetlands_wm,  is.na(Pocc)),
+            fill  = "grey80", color = "white", linewidth = 0.25) +
+    geom_sf(data = boundary_wm, fill = NA, color = "white", linewidth = 1.1) +
+    scale_fill_viridis_c(option = "C", limits = c(0,1), name = "P(occ)") +
+    labs(title = title_txt, x = NULL, y = NULL) +
+    coord_sf(expand = FALSE, crs = wm_crs, datum = NA) +
+    theme_void(base_size = 12) +
+    theme(plot.title = element_text(face = "bold", hjust = 0.5),
+          legend.position = "right",
+          plot.background = element_rect(fill = "white", color = NA))
+}
+
+# 4) Make sure tile cache exists and draw (separate maps)
+dir.create("tile-cache", showWarnings = FALSE)
+
+year_lab <- yr_sel
+p_ceylon <- site_satellite_map(cey_boundary_d, cey_poly_p,
+                               paste0("Ceylon WMA — ", year_lab), zoom = 16)
+p_jones  <- site_satellite_map(jon_boundary_d,  jon_poly_p,
+                               paste0("Jones Center Ichauway — ", year_lab), zoom = 15)
+
+print(p_ceylon)
+print(p_jones)
+
+
+```
 
 
