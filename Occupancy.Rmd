@@ -91,9 +91,15 @@ habitat_data <- habitat_data %>% semi_join(key_h, by=c("Site","WetlandID"))
 wet_near_data<- wet_near_data%>% semi_join(key_h, by=c("Site","WetlandID"))
 ratio_data   <- ratio_data   %>% semi_join(key_h, by=c("Site","WetlandID"))
 
-# Species recode (only need LICAP)
-call_data$Species <- dplyr::recode(call_data$Species, "LICAP" = "Rana capito")
-dip_data$Species  <- dplyr::recode(dip_data$Species,  "LICAP" = "Rana capito")
+
+# Species recode (only need LICAP) — keep other species as-is
+call_data$Species <- dplyr::recode(call_data$Species,
+  "LICAP" = "Rana capito", "Rana capito" = "Rana capito",
+  .default = call_data$Species)
+
+dip_data$Species  <- dplyr::recode(dip_data$Species,
+  "LICAP" = "Rana capito", "Rana capito" = "Rana capito",
+  .default = dip_data$Species)
 
 # Keep only Rana capito for detections
 call_data <- call_data %>% filter(Species == "Rana capito")
@@ -306,35 +312,44 @@ stopifnot(all(y_call <= effort_call))
 ## EGG: effort & detections (collapsed to month)
 ## ================================
 # Required: egg_data$Detected is 0/1
+## ================================
+## EGG: effort & detections (collapsed to month)
+## ================================
 stopifnot("Detected" %in% names(egg_data))
 
 egg_data_clean <- egg_data %>%
-  filter(!is.na(wetlandid), wetlandid != 10) %>%   # drop NA and wetland 10
+  filter(!is.na(wetlandid), wetlandid != 10) %>%
   mutate(
-    wetlandid = as.character(wetlandid),           # cast to character
-    wetlandid = stringr::str_replace(wetlandid, "\\.0+$", ""),  # strip trailing .0
+    wetlandid = as.character(wetlandid),
+    wetlandid = stringr::str_replace(wetlandid, "\\.0+$", ""),
     wetlandid = stringr::str_trim(wetlandid)
   )
 
 egg_use <- egg_data_clean %>%
   rename(Site = site, WetlandID = wetlandid, Year = year) %>%
-  mutate(Month = factor(month, levels = month.name),
-         Year  = as.integer(Year)) %>%
+  mutate(
+    Month = if (is.numeric(month)) factor(
+               month.name[pmax(1, pmin(12, as.integer(month)))],
+               levels = month.name
+            ) else factor(stringr::str_to_title(month), levels = month.name),
+    Year  = as.integer(Year)
+  ) %>%
   inner_join(wet_index, by = c("Site","WetlandID")) %>%
   mutate(
     site_j = as.integer(factor(Site, levels = site_levels)),
     mon_k  = as.integer(Month),
-    yr_t   = match(Year, all_years),      # convert Year -> 1..nYear
+    yr_t   = match(Year, all_years),
     det    = as.integer(Detected > 0)
   ) %>%
   filter(!is.na(site_j), !is.na(WetID), !is.na(mon_k), mon_k >= 1, mon_k <= 12,
          !is.na(yr_t), yr_t >= 1, yr_t <= nYear) %>%
   group_by(site_j, WetID, mon_k, yr_t) %>%
   summarise(
-    effort = 1L,                          # any egg visit that month
-    y      = as.integer(any(det == 1L)),  # detection if any egg visit detected
+    effort = 1L,
+    y      = as.integer(any(det == 1L)),
     .groups = "drop"
   )
+
 
 if (nrow(egg_use)) {
   idx <- as.matrix(egg_use[, c("site_j","WetID","mon_k","yr_t")])
@@ -510,19 +525,6 @@ print(fit, digits = 3)
 
 
 ```
-
-```{r}
-sumtab <- fit$summary
-bad_rhat <- rownames(sumtab)[sumtab[, "Rhat"] > 1.01]
-low_neff <- rownames(sumtab)[sumtab[, "n.eff"] < 400]
-
-list(
-  rhat_gt_1.01 = bad_rhat,
-  neff_lt_400  = low_neff
-)
-
-```
-
 ```{r}
 # ---- Extract posterior means and save ----
 
@@ -580,8 +582,95 @@ saveRDS(wet_index,       file = "wet_index.rds")
 saveRDS(nWetlands_vec,   file = "nWetlands_vec.rds")
 ```
 
+```{r}
+
+library(coda)
+
+## 0) Your simple flags (unchanged)
+sumtab   <- fit$summary
+bad_rhat <- rownames(sumtab)[sumtab[,"Rhat"]  > 1.01]
+low_neff <- rownames(sumtab)[sumtab[,"n.eff"] < 400]
+bad_rhat <- bad_rhat[!is.na(bad_rhat)]
+low_neff <- low_neff[!is.na(low_neff)]
+to_check <- unique(c(bad_rhat, low_neff))
+
+## 1) Get an mcmc.list no matter how jagsUI stored things
+get_mcmc_list <- function(fit) {
+  # Preferred locations
+  if (!is.null(fit$mcmc) && inherits(fit$mcmc, "mcmc.list")) return(fit$mcmc)
+  if (!is.null(fit$samples) && inherits(fit$samples, "mcmc.list")) return(fit$samples)
+  # R2jags-style (sometimes present even under jagsUI)
+  if (!is.null(fit$BUGSoutput) && !is.null(fit$BUGSoutput$sims.array)) {
+    sa <- fit$BUGSoutput$sims.array  # dims: iter x chains x params
+    par_names <- dimnames(sa)[[3]]
+    iters <- dim(sa)[1]; chains <- dim(sa)[2]; pars <- dim(sa)[3]
+    return(mcmc.list(lapply(seq_len(chains), function(ch) {
+      mat <- matrix(sa[, ch, ], nrow = iters, ncol = pars)
+      colnames(mat) <- par_names
+      mcmc(mat)
+    })))
+  }
+  # Last resort: try to build a single-chain object from sims.list (no GR possible)
+  if (!is.null(fit$sims.list)) {
+    # flatten sims.list into a matrix of draws (combined chains) -> single mcmc
+    sl <- fit$sims.list
+    cols <- names(sl)
+    mat <- cbind.data.frame(lapply(sl, as.numeric))
+    mat <- as.matrix(mat)
+    colnames(mat) <- cols
+    return(mcmc.list(mcmc(mat)))  # single chain
+  }
+  stop("No MCMC draws found in fit.")
+}
+
+mlist <- get_mcmc_list(fit)
+n_ch   <- length(mlist)
+
+## 2) Keep only flagged parameters that actually exist
+avail <- colnames(as.matrix(mlist[[1]]))
+keep  <- intersect(to_check, avail)
+
+if (!length(keep)) {
+  message("Flags found but none were monitored. Available example vars: ",
+          paste(head(avail, 10), collapse = ", "))
+} else {
+  mlist_keep <- mcmc.list(lapply(mlist, function(ch) ch[, keep, drop = FALSE]))
+
+  ## 3) Trace plots (works for any number of chains)
+  pdf("trace_problem_params.pdf", width = 8.5, height = 11)
+  step <- 24
+  for (i in seq(1, length(keep), by = step)) {
+    idx <- i:min(i + step - 1, length(keep))
+    traceplot(mlist_keep[, keep[idx], drop = FALSE])
+  }
+  dev.off()
+
+  ## 4) Gelman–Rubin ONLY if we actually have ≥ 2 chains
+  if (n_ch >= 2) {
+    gr  <- gelman.diag(mlist_keep, autoburnin = FALSE, multivariate = FALSE)
+    print(gr)
+  } else {
+    message("Only one chain available; Gelman–Rubin requires ≥ 2 chains. ",
+            "Using Rhat from fit$summary instead.")
+  }
+
+  ## 5) Effective sample sizes (always useful)
+  ess <- effectiveSize(mlist_keep)
+  print(sort(ess)[1:min(25, length(ess))])
+
+  ## 6) Save a tidy CSV (Rhat from your summary, ESS from chains)
+  out <- data.frame(
+    param = keep,
+    Rhat  = sumtab[keep, "Rhat"],
+    ESS   = as.numeric(ess[keep]),
+    row.names = NULL
+  )
+  write.csv(out, "convergence_flags_summary.csv", row.names = FALSE)
+  out
+}
 
 
+```
 ```{r}
 library(dplyr)
 library(ggplot2)
@@ -801,8 +890,126 @@ print(p_month_split)
 ```
 
 
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggridges)
+
+s <- fit$sims.list
+stopifnot(!is.null(s$beta_yr_call),
+          !is.null(s$beta_yr_dip))
+
+post_year <- bind_rows(
+  data.frame(Estimate = as.vector(s$beta_yr_call),
+             Method   = "Call",
+             Level    = ""),
+  data.frame(Estimate = as.vector(s$beta_yr_dip),
+             Method   = "Dip",
+             Level    = "")
+)
+
+# Include Egg only if present
+if (!is.null(s$beta_yr_egg)) {
+  post_year <- bind_rows(
+    post_year,
+    data.frame(Estimate = as.vector(s$beta_yr_egg),
+               Method   = "Egg",
+               Level    = "")
+  )
+}
+
+# Order panels Call–Dip–Egg (only those that exist)
+meth_levels <- c("Call","Dip","Egg")
+post_year$Method <- factor(
+  post_year$Method,
+  levels = meth_levels[meth_levels %in% unique(post_year$Method)]
+)
+
+xr <- range(post_year$Estimate, na.rm = TRUE)
+
+p_year_effect <- ggplot(post_year, aes(x = Estimate, y = Level, fill = after_stat(x))) +
+  geom_density_ridges_gradient(scale = 1.6, rel_min_height = 0.01, size = 0.3) +
+  scale_fill_viridis_c(name = "Estimate", limits = xr, oob = scales::squish) +
+  facet_wrap(~ Method, ncol = 2) +
+  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.4, colour = "grey40") +
+  coord_cartesian(xlim = xr) +
+  labs(x = "Year effect on detection (logit scale)", y = NULL,
+       title = "Posterior ridgeplots — year effect on detection") +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid = element_blank(),
+        strip.text = element_text(face = "bold"),
+        axis.text.y = element_blank())
+
+print(p_year_effect)
+# ggsave("ridge_year_effect_detection.jpeg", p_year_effect, width = 9, height = 5.5, dpi = 300)
+
+```
 
 
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggridges)
+
+s <- fit$sims.list
+stopifnot(!is.null(s$beta_yr_call),
+          !is.null(s$beta_yr_dip))
+
+# Figure out year labels from your earlier pipeline; fall back if missing
+n_yr <- ncol(as.data.frame(s$beta_yr_call))
+year_labs <- if (exists("all_years")) as.character(all_years) else paste0("Year_", seq_len(n_yr))
+
+# ---- Build long posterior by METHOD × YEAR (coefficients on logit scale) ----
+df_call_y <- as.data.frame(s$beta_yr_call)
+names(df_call_y) <- year_labs
+df_call_y <- df_call_y %>%
+  pivot_longer(everything(), names_to = "Year", values_to = "Estimate") %>%
+  mutate(Method = "Call")
+
+df_dip_y <- as.data.frame(s$beta_yr_dip)
+names(df_dip_y) <- year_labs
+df_dip_y <- df_dip_y %>%
+  pivot_longer(everything(), names_to = "Year", values_to = "Estimate") %>%
+  mutate(Method = "Dip")
+
+post_year_split <- bind_rows(df_call_y, df_dip_y)
+
+# Include Egg if present
+if (!is.null(s$beta_yr_egg)) {
+  df_egg_y <- as.data.frame(s$beta_yr_egg)
+  names(df_egg_y) <- year_labs
+  df_egg_y <- df_egg_y %>%
+    pivot_longer(everything(), names_to = "Year", values_to = "Estimate") %>%
+    mutate(Method = "Egg")
+  post_year_split <- bind_rows(post_year_split, df_egg_y)
+}
+
+# Order facets and year labels
+meth_levels <- c("Call","Dip","Egg")
+post_year_split$Method <- factor(
+  post_year_split$Method,
+  levels = meth_levels[meth_levels %in% unique(post_year_split$Method)]
+)
+post_year_split$Year <- factor(post_year_split$Year, levels = year_labs)
+
+xr <- range(post_year_split$Estimate, na.rm = TRUE)
+
+p_year_split <- ggplot(post_year_split, aes(x = Estimate, y = Year, fill = after_stat(x))) +
+  geom_density_ridges_gradient(scale = 2, rel_min_height = 0.01, size = 0.3) +
+  scale_fill_viridis_c(name = "Estimate", limits = xr, oob = scales::squish) +
+  facet_wrap(~ Method, ncol = 1) +
+  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.4, colour = "grey40") +
+  coord_cartesian(xlim = xr) +
+  labs(x = "Year effect on detection (logit scale)", y = NULL) +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid = element_blank(),
+        strip.text = element_text(face = "bold"))
+
+print(p_year_split)
+# ggsave("ridge_year_effect_by_year.jpeg", p_year_split, width = 9, height = 6 + 0.4*length(year_labs), dpi = 300)
+
+```
 
 
 ```{r}
