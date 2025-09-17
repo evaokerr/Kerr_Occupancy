@@ -1202,7 +1202,7 @@ jon_boundary_d <- dissolve_boundary(jon_boundary)
 
 # 3) Satellite map function (no max_tiles arg)
 site_satellite_map <- function(boundary_sf, wetlands_sf, title_txt,
-                               provider = "Esri.WorldImagery", zoom = 16) {
+                               provider = "Esri.WorldImagery", zoom = 16,legend_title = expression(z~"(occupancy)")) {
   # Fetch tiles (Web Mercator), cropped to boundary bbox
   r <- maptiles::get_tiles(boundary_sf, provider = provider, zoom = zoom,
                            crop = TRUE, cachedir = "tile-cache")
@@ -1216,13 +1216,14 @@ site_satellite_map <- function(boundary_sf, wetlands_sf, title_txt,
   ggplot() +
     tidyterra::geom_spatraster_rgb(data = r) +
     # subtle halo so wetlands pop on imagery
-    geom_sf(data = wetlands_wm, color = "white", linewidth = 0.8, fill = NA) +
-    geom_sf(data = dplyr::filter(wetlands_wm, !is.na(Pocc)),
-            aes(fill = Pocc), color = "white", linewidth = 0.25) +
+    #geom_sf(data = wetlands_wm, color = "white", linewidth = 0.0, fill = NA) +
+        geom_sf(data = dplyr::filter(wetlands_wm, !is.na(Pocc)),
+            aes(fill = Pocc), color = NA) +
     geom_sf(data = dplyr::filter(wetlands_wm,  is.na(Pocc)),
-            fill  = "grey80", color = "white", linewidth = 0.25) +
-    geom_sf(data = boundary_wm, fill = NA, color = "white", linewidth = 1.1) +
-    scale_fill_viridis_c(option = "C", limits = c(0,1), name = "P(occ)") +
+            fill = "grey80", color = NA) +
+    geom_sf(data = boundary_wm, fill = NA, color = "black", linewidth = 1.1) +
+    #scale_fill_gradientn(colors = rev(heat.colors(256)), limits = c(0,1), name = "P(occ)")+
+    scale_fill_viridis_c(option = "C", begin = 0.3, end = 0.95,limits = c(0, 1), name = legend_title) +
     labs(title = title_txt, x = NULL, y = NULL) +
     coord_sf(expand = FALSE, crs = wm_crs, datum = NA) +
     theme_void(base_size = 12) +
@@ -1246,4 +1247,79 @@ print(p_jones)
 
 ```
 
+```{r}
+# --- Use psi_wet to make the ψ map ---
+
+# 1) Build the minimal table your map code expects
+#    (it looks for one of c("Pocc","med","z_mean","psi_mean","psi","p"); we have "med")
+s_wet <- psi_wet %>%
+  dplyr::select(Site, WetlandID, med) %>%
+  dplyr::mutate(WetlandID = as.character(WetlandID))
+
+# 2) Reuse your existing map pipeline unchanged (just optional legend rename)
+canon_id <- function(x) as.character(x) |>
+  stringr::str_trim() |>
+  stringr::str_replace("\\.0+$","") |>
+  toupper()
+
+prob_col <- intersect(c("Pocc","med","z_mean","psi_mean","psi","p"), names(s_wet))[1]
+stopifnot(length(prob_col) == 1)
+
+sw <- s_wet %>%
+  dplyr::mutate(
+    Site = dplyr::recode(as.character(Site),
+                         "Ceylon" = "Ceylon WMA",
+                         "Jones Center" = "Jones Center Ichauway",
+                         .default = as.character(Site)),
+    WetlandID = canon_id(WetlandID),
+    Pocc = pmin(pmax(.data[[prob_col]], 0), 1)   # this is ψ (median) now
+  ) %>%
+  dplyr::select(Site, WetlandID, Pocc)
+
+cey_poly <- ceylon_study %>% dplyr::mutate(WetlandID = canon_id(WetlandID))
+jon_poly <- jones_study  %>% dplyr::mutate(WetlandID = canon_id(WetlandID))
+
+cey_poly_p <- cey_poly %>% dplyr::left_join(dplyr::filter(sw, Site == "Ceylon WMA"),             by = "WetlandID")
+jon_poly_p <- jon_poly %>% dplyr::left_join(dplyr::filter(sw, Site == "Jones Center Ichauway"), by = "WetlandID")
+
+# (Optional) relabel legend to show ψ
+site_satellite_map <- function(boundary_sf, wetlands_sf, title_txt,
+                               provider = "Esri.WorldImagery", zoom = 16,
+                               legend_title = expression(psi~"(occupancy)")) {
+  r <- maptiles::get_tiles(boundary_sf, provider = provider, zoom = zoom,
+                           crop = TRUE, cachedir = "tile-cache")
+  wm_crs <- sf::st_crs(terra::crs(r, proj = TRUE))
+  boundary_wm <- sf::st_transform(boundary_sf, wm_crs)
+  wetlands_wm <- sf::st_transform(wetlands_sf, wm_crs)
+  r <- terra::mask(r, terra::vect(boundary_wm))
+
+  ggplot() +
+    tidyterra::geom_spatraster_rgb(data = r) +
+    #geom_sf(data = wetlands_wm, color = "white", linewidth = 0.05, fill = NA) +
+    geom_sf(data = dplyr::filter(wetlands_wm, !is.na(Pocc)),
+            aes(fill = Pocc), color = NA) +
+    geom_sf(data = dplyr::filter(wetlands_wm,  is.na(Pocc)),
+            fill = "grey80", color = NA) +
+    geom_sf(data = boundary_wm, fill = NA, color = "black", linewidth = 1.1) +
+    #scale_fill_gradientn(colors = rev(heat.colors(256)), limits = c(0,1), name = legend_title) +
+    scale_fill_viridis_c(option = "C", begin = 0.3, end = 0.95, limits = c(0, 1), name = legend_title) +
+    labs(title = title_txt, x = NULL, y = NULL) +
+    coord_sf(expand = FALSE, crs = wm_crs, datum = NA) +
+    theme_void(base_size = 12) +
+    theme(plot.title = element_text(face = "bold", hjust = 0.5),
+          legend.position = "right",
+          plot.background = element_rect(fill = "white", color = NA))
+}
+
+# 3) Draw the maps (same as before)
+dir.create("tile-cache", showWarnings = FALSE)
+p_ceylon <- site_satellite_map(cey_boundary_d, cey_poly_p,
+                               paste0("Ceylon WMA"), zoom = 16)
+p_jones  <- site_satellite_map(jon_boundary_d,  jon_poly_p,
+                               paste0("Jones Center Ichauway"), zoom = 15)
+
+print(p_ceylon)
+print(p_jones)
+
+```
 
