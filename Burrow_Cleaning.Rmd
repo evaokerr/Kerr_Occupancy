@@ -37,6 +37,34 @@ wetland <- read_csv("wetland_management.csv") %>%
   select(Site, WetlandID) %>%
   filter(Site == "Ceylon WMA")
 ```
+```{r}
+library(dplyr)
+library(stringr)
+
+aquatic_terms <- c("dip net", "at wetland", "in wetland", "aquatic")
+
+ceylon_terr_2024 <- raw_data %>%
+  # Camden County = Ceylon; year = 2024
+  filter(County == "Camden", year.found == 2024) %>%
+  # Exclude aquatic/wetland detections
+  mutate(ch = str_to_lower(str_trim(`Confirmed Habitat`))) %>%
+  filter(!ch %in% aquatic_terms) %>%
+  # Exclude known wetland points (the four Longitudes)
+  filter(!Longitude %in% c(-81.61694562, -81.61695873, -81.61698016, -81.617033)) %>%
+  # Drop rows without coordinates
+  filter(!is.na(Latitude), !is.na(Longitude))
+
+# Total records
+n_records <- nrow(ceylon_terr_2024)
+
+# Unique points (Lat/Long combos)
+n_unique_points <- nrow(distinct(ceylon_terr_2024, Latitude, Longitude))
+
+cat("\n--- Terrestrial locations at Ceylon (2024) ---\n")
+cat("Total records:       ", n_records, "\n")
+cat("Unique coordinates:  ", n_unique_points, "\n")
+
+```
 
 ```{r}
 library(sf)
@@ -295,6 +323,213 @@ print(ratio_b_tof_1, n = 10)
 
 # Save to CSV
 readr::write_csv(ratio_b_tof_1, "ratio_b_tof_1.csv")
+
+```
+
+```{r}
+# --- Map: Ceylon 2024 terrestrial frog locations on satellite basemap ---
+
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(maptiles)
+library(tidyterra)
+
+# 1) Ensure wetlands are available (read if not already in memory)
+if (!exists("wetlands") || !inherits(wetlands, "sf")) {
+  wetlands <- st_read("ceylon_wetlands_subset.shp", quiet = TRUE)
+}
+
+# 2) Make the points sf and match CRS to wetlands
+stopifnot(all(c("Latitude", "Longitude") %in% names(ceylon_terr_2024)))
+pts_ceylon <- st_as_sf(
+  ceylon_terr_2024,
+  coords = c("Longitude", "Latitude"),
+  crs = 4326
+) |> st_transform(st_crs(wetlands))
+
+# 3) Build a single boundary to crop tiles nicely
+cey_boundary <- wetlands |>
+  st_make_valid() |>
+  mutate(.grp = 1L) |>
+  dplyr::group_by(.grp) |>
+  dplyr::summarise(geometry = st_union(geometry), .groups = "drop") |>
+  dplyr::select(-.grp)
+
+# 4) Fetch satellite tiles and crop to boundary
+dir.create("tile-cache", showWarnings = FALSE)
+r <- maptiles::get_tiles(cey_boundary, provider = "Esri.WorldImagery",
+                         zoom = 16, crop = TRUE, cachedir = "tile-cache")
+
+# Align CRS
+wm_crs <- st_crs(terra::crs(r, proj = TRUE))
+boundary_wm <- st_transform(cey_boundary, wm_crs)
+wetlands_wm <- st_transform(wetlands, wm_crs)
+pts_wm      <- st_transform(pts_ceylon, wm_crs)
+
+# 5) Plot
+p_ceylon_pts <- ggplot() +
+  tidyterra::geom_spatraster_rgb(data = r) +
+  geom_sf(data = wetlands_wm, fill = NA, color = "white", linewidth = 0.3) +
+  geom_sf(data = boundary_wm, fill = NA, color = "black", linewidth = 0.8) +
+  geom_sf(data = pts_wm, shape = 21, fill = "red", color = "white", stroke = 0.3, size = 2.2, alpha = 0.9) +
+  coord_sf(expand = FALSE, crs = wm_crs, datum = NA) +
+  labs(title = "Ceylon WMA — Terrestrial Gopher Frog Locations (2024)",
+       subtitle = paste0("n = ", nrow(pts_ceylon)),
+       x = NULL, y = NULL) +
+  theme_void(base_size = 12) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+
+print(p_ceylon_pts)
+ggsave("ceylon_terrestrial_2024_map.png", p_ceylon_pts, width = 8, height = 8, dpi = 300)
+
+```
+
+```{r}
+# --- Nearest 3 wetlands for each 2024 terrestrial point at Ceylon ---
+
+library(sf)
+library(dplyr)
+library(purrr)
+library(units)
+
+# 0) Ensure inputs
+stopifnot(exists("ceylon_terr_2024"))
+
+# 1) Load wetlands (Ceylon subset) if not already loaded
+if (!exists("wetlands") || !inherits(wetlands, "sf")) {
+  wetlands <- st_read("ceylon_wetlands_subset.shp", quiet = TRUE)
+}
+
+# 2) Robustly pick a WetlandID column from the shapefile
+wet_id_col <- intersect(names(wetlands),
+                        c("WetlandID","WETLANDID","wetlandid","Name","NAME","id","ID"))[1]
+if (is.na(wet_id_col)) {
+  wetlands$WET_ID_FALLBACK <- seq_len(nrow(wetlands))
+  wet_id_col <- "WET_ID_FALLBACK"
+}
+
+# 3) Make the points sf and put them in the same CRS as wetlands
+pts <- st_as_sf(ceylon_terr_2024, coords = c("Longitude", "Latitude"), crs = 4326)
+pts <- st_transform(pts, st_crs(wetlands))
+
+# Give each point a simple ID (row index) for joining/traceability
+pts$.pt_id <- seq_len(nrow(pts))
+
+# 4) Point-to-polygon distances (meters by default if CRS is projected)
+D <- st_distance(pts, wetlands)  # units
+
+# Convert to plain numeric meters for sorting and CSVs
+D_m <- units::drop_units(D)
+
+# How many neighbors we can actually return
+k <- min(3L, nrow(wetlands))
+
+# 5) For each point, find indices of k nearest wetlands
+ord_idx <- apply(D_m, 1, order)  # matrix of column indices (wetlands) sorted by distance per row
+if (k == 1L) {
+  # keep shape consistent when only one wetland exists
+  ord_idx <- matrix(ord_idx[1, ], nrow = 1)
+}
+
+# 6) Build the summary table
+nearest_tbl <- purrr::map_dfr(seq_len(nrow(pts)), function(i) {
+  nn_cols <- ord_idx[seq_len(k), i]  # the k nearest wetland indices for point i
+  # safeguard for k < 3 (pad with NAs)
+  pad_len <- 3L - length(nn_cols)
+  if (pad_len > 0) nn_cols <- c(nn_cols, rep(NA_integer_, pad_len))
+
+  # Pull IDs and distances
+  nn_ids <- ifelse(is.na(nn_cols), NA, wetlands[[wet_id_col]][nn_cols])
+  nn_dst <- ifelse(is.na(nn_cols), NA_real_, D_m[i, nn_cols])
+
+  tibble(
+    pt_id     = pts$.pt_id[i],
+    # include original coords for convenience
+    Latitude  = as.numeric(st_coordinates(pts[i, ])[2]),
+    Longitude = as.numeric(st_coordinates(pts[i, ])[1]),
+
+    nearest_wetland_id_1 = nn_ids[1],
+    nearest_wetland_id_2 = nn_ids[2],
+    nearest_wetland_id_3 = nn_ids[3],
+
+    dist_m_1 = nn_dst[1],
+    dist_m_2 = nn_dst[2],
+    dist_m_3 = nn_dst[3],
+
+    dist_km_1 = nn_dst[1] / 1000,
+    dist_km_2 = nn_dst[2] / 1000,
+    dist_km_3 = nn_dst[3] / 1000
+  )
+})
+
+# 7) Join back any columns you want from the original data (optional)
+#    Example: keep Confirmed Habitat and year.found
+keep_cols <- intersect(c("Confirmed Habitat","year.found","Site","County"), names(ceylon_terr_2024))
+nearest_tbl <- nearest_tbl %>%
+  left_join(
+    cbind(pt_id = pts$.pt_id, st_drop_geometry(pts)[, keep_cols, drop = FALSE]),
+    by = "pt_id"
+  )
+
+# 8) Inspect and save
+print(nearest_tbl, n = min(10, nrow(nearest_tbl)))
+readr::write_csv(nearest_tbl, "ceylon_terrestrial_2024_nearest3_wetlands.csv")
+
+```
+
+```{r}
+# --- Summary: how many terrestrial points had each wetland as their NEAREST (edge-based) ---
+
+library(dplyr)
+library(sf)
+
+# 1) Ensure points and wetlands exist (pts and wetlands should already be created earlier)
+stopifnot(exists("pts"), inherits(pts, "sf"))
+stopifnot(exists("wetlands"), inherits(wetlands, "sf"))
+
+# 2) Pick wetland ID column
+wet_id_col <- intersect(names(wetlands),
+                        c("WetlandID","WETLANDID","wetlandid","Name","NAME","id","ID"))[1]
+if (is.na(wet_id_col)) {
+  wetlands$WET_ID_FALLBACK <- seq_len(nrow(wetlands))
+  wet_id_col <- "WET_ID_FALLBACK"
+}
+
+# 3) Compute distances (if not already done)
+if (!exists("D_m")) {
+  D <- st_distance(pts, wetlands)
+  D_m <- units::drop_units(D)
+}
+
+# 4) For each point, find the index of the nearest wetland
+nearest_idx <- apply(D_m, 1, which.min)
+nearest_wetland_ids <- wetlands[[wet_id_col]][nearest_idx]
+
+# 5) Summarize: count how many points picked each wetland as nearest
+wetland_summary <- data.frame(WetlandID = nearest_wetland_ids) %>%
+  group_by(WetlandID) %>%
+  summarise(n_points_nearest = n()) %>%
+  arrange(desc(n_points_nearest))
+
+# 6) Optional: join with wetland geometry to map or export
+wetland_summary_sf <- wetlands %>%
+  select(WetlandID = all_of(wet_id_col)) %>%
+  left_join(wetland_summary, by = "WetlandID") %>%
+  mutate(n_points_nearest = ifelse(is.na(n_points_nearest), 0L, n_points_nearest))
+
+# 7) Preview & save
+print(wetland_summary, n = nrow(wetland_summary))
+readr::write_csv(wetland_summary, "ceylon_wetlands_nearest_point_counts.csv")
+
+# Optional map visualization
+library(ggplot2)
+ggplot() +
+  geom_sf(data = wetlands, fill = "grey90", color = "grey70") +
+  geom_sf(data = wetland_summary_sf, aes(fill = n_points_nearest), color = "white") +
+  scale_fill_viridis_c(name = "# points nearest") +
+  labs(title = "Number of Terrestrial Points for Which Each Wetland Was Nearest") +
+  theme_minimal()
 
 ```
 

@@ -32,15 +32,41 @@ egg_data       <- readr::read_csv("egg_mass_clean_capito.csv")
 # (requires lubridate)
 library(lubridate)
 
-# Parse CALL dates flexibly (mdy/ymd/dmy)
-if (!inherits(call_data$Date1, "Date")) {
-  d1 <- suppressWarnings(ymd(call_data$Date1))
-  miss <- is.na(d1)
-  if (any(miss)) d1[miss] <- suppressWarnings(mdy(call_data$Date1[miss]))
-  miss <- is.na(d1)
-  if (any(miss)) d1[miss] <- suppressWarnings(dmy(call_data$Date1[miss]))
-  call_data$Date1 <- as.Date(d1)
+# --- Robust date for CALLS: prefer Date2 (yyyymmdd), else parse Date1 ---
+library(lubridate)
+call_data <- call_data %>%
+  mutate(
+    Date2_chr = trimws(as.character(Date2)),
+    use_d2    = !is.na(Date2_chr) & grepl("^\\d{8}$", Date2_chr),
+    d_from_d2 = suppressWarnings(ymd(ifelse(use_d2, Date2_chr, NA_character_))),
+    d_from_d1 = {
+      x <- trimws(as.character(Date1))
+      # try mdy first (e.g., "4/5/22"), then ymd, then dmy
+      d <- suppressWarnings(mdy(x))
+      bad <- is.na(d)
+      if (any(bad)) d[bad] <- suppressWarnings(ymd(x[bad]))
+      bad <- is.na(d)
+      if (any(bad)) d[bad] <- suppressWarnings(dmy(x[bad]))
+      d
+    },
+    Date_call = coalesce(d_from_d2, d_from_d1)  # final date
+  )
+
+# If anything still weird, try to catch out-of-range years and re-parse the other way
+sus <- is.na(call_data$Date_call) | year(call_data$Date_call) < 2018 | year(call_data$Date_call) > 2026
+if (any(sus)) {
+  # last-ditch: swap-day-month attempt on those rows
+  x <- trimws(as.character(call_data$Date1[sus]))
+  d_alt <- suppressWarnings(dmy(x))
+  call_data$Date_call[sus & !is.na(d_alt)] <- d_alt[!is.na(d_alt)]
 }
+
+# Use the clean date
+call_data$Date1 <- as.Date(call_data$Date_call)
+
+# Rebuild Month/Year/YearIndex from the clean column
+call_data$Month <- factor(month(call_data$Date1, label = TRUE, abbr = FALSE), levels = month.name)
+call_data$Year  <- year(call_data$Date1)
 
 # Parse DIP dates (supports Excel serials or mixed strings)
 if (is.numeric(dip_data$Date)) {
@@ -518,7 +544,7 @@ fit <- jagsUI::jags(
   inits = inits_fun,
   parameters.to.save = params,
   model.file = "licap_occ_simple.jags",
-  n.chains = 3, n.iter = 20000, n.burnin = 10000, n.thin = 4, parallel = TRUE
+  n.chains = 3, n.iter = 50000, n.burnin = 15000, n.thin = 5, parallel = TRUE
 )
 
 print(fit, digits = 3)
@@ -680,32 +706,53 @@ s <- fit$sims.list
 stopifnot(!is.null(s$alpha_hydro), !is.null(s$alpha_canopy),
           !is.null(s$alpha_dist),  !is.null(s$alpha_ratio))
 
-# long posterior for the four occupancy covariates (overall)
+# long posterior (same as you had)
 post_overall <- dplyr::bind_rows(
-  data.frame(Estimate = s$alpha_canopy,  ParamGroup = "Canopy",          Level = ""),
-  data.frame(Estimate = s$alpha_hydro,   ParamGroup = "Hydroperiod",      Level = ""),
-  data.frame(Estimate = s$alpha_dist,    ParamGroup = "Nearby (≤500 m)",  Level = ""),
-  data.frame(Estimate = s$alpha_ratio,   ParamGroup = "Ratio",            Level = "")
+  data.frame(Estimate = s$alpha_canopy,  ParamGroup = "Canopy"),
+  data.frame(Estimate = s$alpha_hydro,   ParamGroup = "Hydroperiod"),
+  data.frame(Estimate = s$alpha_dist,    ParamGroup = "Nearby (≤500 m)"),
+  data.frame(Estimate = s$alpha_ratio,   ParamGroup = "Ratio")
 )
 
+# order top → bottom the way you want
+post_overall$ParamGroup <- factor(
+  post_overall$ParamGroup,
+  levels = c("Canopy","Hydroperiod","Nearby (≤500 m)","Ratio")
+)
 
-# global x-range across all panels
-xr <- range(post_overall$Estimate, na.rm = TRUE)
+# settings
+x_lims   <- c(-4, 4)
+x_breaks <- seq(-4, 4, by = 2)
 
-p_overall <- ggplot(post_overall, aes(x = Estimate, y = Level, fill = after_stat(x))) +
-  geom_density_ridges_gradient(scale = 1.6, rel_min_height = 0.01, size = 0.3) +
+p_stacked <- ggplot(post_overall, aes(x = Estimate, y = ParamGroup, fill = after_stat(x))) +
+  # vertical guides (background)
+  geom_vline(xintercept = c(-4, -2, 2, 4), colour = "grey80", linewidth = 0.1) +
+
+  
+  # horizontal guides (one at each ridge baseline)
+  geom_hline(yintercept = seq_along(levels(post_overall$ParamGroup)),
+             colour = "grey80", linewidth = 0.1) +
+  
+  # ridges (all stacked in one panel)
+  geom_density_ridges_gradient(scale = 1.3, rel_min_height = 0.01, size = 0.35) +
+  
+    geom_vline(xintercept = 0, linetype = "dashed", colour = "grey20", linewidth = 0.8) +
+  # axis + extra space beyond ±4
+  scale_x_continuous(
+    name   = "Estimate (logit)",
+    breaks = x_breaks,
+    limits = x_lims,
+    expand = expansion(add = c(0.7, 0.7))
+  ) +
   scale_fill_viridis_c(name = "Estimate", option = "C",
-                       limits = xr, oob = scales::squish) +
-  facet_wrap(~ ParamGroup, ncol = 2) +  # fixed scales across facets
-  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.4, colour = "grey40") +
-  coord_cartesian(xlim = xr) +
-  labs(x = "Estimate", y = NULL, title = "Posterior Distribution") +
+                       limits = x_lims, oob = scales::squish) +
+  labs(y = NULL, title = "Posterior Distributions of Covariate Effects on Occupancy") +
   theme_minimal(base_size = 13) +
-  theme(panel.grid = element_blank(),
-        strip.text = element_text(face = "bold"))
+  theme(panel.grid = element_blank())
 
-print(p_overall)
-# ggsave("ridge_overall_covariates_grid.jpeg", p_overall, width = 9, height = 6.5, dpi = 300)
+p_stacked
+ggsave("ridge_overall_stacked.png", p_stacked, width = 9, height = 5.5, dpi = 300)
+
 
 
 ```
@@ -719,9 +766,10 @@ library(ggridges)
 s <- fit$sims.list
 stopifnot(!is.null(s$land_re))
 
-# Landscape labels present in this run (match your site_levels / landscape index)
+# --- make land_re robustly a matrix ---
+land_re <- as.matrix(s$land_re)   # <-- key change
 landscape_labels <- c("Ceylon WMA", "Jones Center Ichauway")
-n_land <- ncol(s$land_re)
+n_land  <- ncol(land_re)
 
 # Pieces per landscape (NO ratio)
 post_byland_list <- c(
@@ -751,22 +799,30 @@ post_split_grid$ParamGroup <- factor(
   levels = c("Canopy", "Hydroperiod", "Nearby (≤500 m)", "Landscape")
 )
 
-xr <- range(post_split_grid$Estimate, na.rm = TRUE)
+# --- robust x limits to avoid axis blow-up from a few extreme draws ---
+xr <- quantile(post_split_grid$Estimate, c(0.005, 0.995), na.rm = TRUE)
+
 
 ggplot(post_split_grid, aes(x = Estimate, y = Level, fill = after_stat(x))) +
+    geom_vline(xintercept = c(-4, -2, 2, 4), colour = "grey80", linewidth = 0.1) +
+
+  
+  # horizontal guides (one at each ridge baseline)
+  geom_hline(yintercept = seq_along(levels(post_overall$ParamGroup)),
+             colour = "grey80", linewidth = 0.1) +
   geom_density_ridges_gradient(scale = 1.6, rel_min_height = 0.01, size = 0.3) +
   scale_fill_viridis_c(name = "Estimate", option = "C",
                        limits = xr, oob = scales::squish) +
   facet_wrap(~ ParamGroup, ncol = 2) +  # fixed scales across facets
-  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.4, colour = "grey40") +
+  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.8, colour = "grey20") +
   coord_cartesian(xlim = xr) +
-  labs(x = "Estimate", y = NULL, title = "Posterior Distributions") +
+  labs(x = "Estimate (logit)", y = NULL, title = "Posterior Distributions of Covariate Effects on Occupancy by Landscape") +
   theme_minimal(base_size = 13) +
   theme(panel.grid = element_blank(),
         strip.text = element_text(face = "bold"))
 
 
-# ggsave("ridge_by_landscape_no_ratio.jpeg", width = 10, height = 8, dpi = 300)
+ggsave("ridge_by_landscape_no_ratio.jpeg", width = 10, height = 8, dpi = 300)
 
 
 ```
@@ -776,52 +832,56 @@ library(ggplot2)
 library(ggridges)
 
 s <- fit$sims.list
-stopifnot(!is.null(s$beta_mon_call),
-          !is.null(s$beta_mon_dip))
+stopifnot(!is.null(s$beta_mon_call), !is.null(s$beta_mon_dip))
 
-# Long posterior: pool all months’ coefficients within each method
+# 1) Build long posterior (pool months within each method)
 post_month <- bind_rows(
-  data.frame(Estimate = as.vector(s$beta_mon_call),
-             Method   = "Call",
-             Level    = ""),
-  data.frame(Estimate = as.vector(s$beta_mon_dip),
-             Method   = "Dip",
-             Level    = "")
+  data.frame(Estimate = as.vector(s$beta_mon_call), Method = "Call"),
+  data.frame(Estimate = as.vector(s$beta_mon_dip),  Method = "Dip")
 )
-
-# Include Egg only if present
 if (!is.null(s$beta_mon_egg)) {
   post_month <- bind_rows(
     post_month,
-    data.frame(Estimate = as.vector(s$beta_mon_egg),
-               Method   = "Egg",
-               Level    = "")
+    data.frame(Estimate = as.vector(s$beta_mon_egg), Method = "Egg")
   )
 }
 
-# Order panels Call–Dip–Egg (only those that exist)
+# 2) Order rows Call–Dip–Egg (only those present)
 meth_levels <- c("Call","Dip","Egg")
 post_month$Method <- factor(post_month$Method,
                             levels = meth_levels[meth_levels %in% unique(post_month$Method)])
 
-xr <- range(post_month$Estimate, na.rm = TRUE)
+# 2b) Rename factor labels
+post_month$Method <- dplyr::recode(post_month$Method,
+                                   "Call" = "Call Files",
+                                   "Dip"  = "Dipnet Surveys",
+                                   "Egg"  = "Egg Mass Surveys")
 
-p_month_effect <- ggplot(post_month, aes(x = Estimate, y = Level, fill = after_stat(x))) +
-  geom_density_ridges_gradient(scale = 1.6, rel_min_height = 0.01, size = 0.3) +
+# 3) Axis limits/breaks
+x_lims   <- c(-25, 25)
+x_breaks <- seq(-20, 20, by = 10)
+
+# 4) Plot
+p_month_stacked <- ggplot(post_month, aes(x = Estimate, y = Method, fill = after_stat(x))) +
+  geom_vline(xintercept = x_breaks, colour = "grey80", linewidth = 0.1) +
+  geom_hline(yintercept = seq_along(levels(post_month$Method)),
+             colour = "grey80", linewidth = 0.1) +
+  geom_density_ridges_gradient(scale = 1.3, rel_min_height = 0.01, size = 0.35) +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey20", linewidth = 0.8) +
+  scale_x_continuous(
+    name   = "Estimate (logit)",
+    limits = x_lims,
+    breaks = x_breaks,
+    expand = expansion(add = c(0.7, 0.7))
+  ) +
   scale_fill_viridis_c(name = "Estimate", option = "D",
-                       limits = xr, oob = scales::squish) +
-  facet_wrap(~ Method, ncol = 2) +              # fixed scales across facets
-  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.4, colour = "grey40") +
-  coord_cartesian(xlim = xr) +
-  labs(x = "Month effect on detection (logit scale)", y = NULL,
-       title = "Posterior ridgeplots — month effect on detection") +
+                       limits = x_lims, oob = scales::squish) +
+  labs(y = NULL, title = "Posterior Distributions of Month Effects on Detection") +
   theme_minimal(base_size = 13) +
-  theme(panel.grid = element_blank(),
-        strip.text = element_text(face = "bold"),
-        axis.text.y = element_blank())          # hides the empty 'Level' label row
+  theme(panel.grid = element_blank())
 
-print(p_month_effect)
-# ggsave("ridge_month_effect_detection.jpeg", p_month_effect, width = 9, height = 5.5, dpi = 300)
+p_month_stacked
+ggsave("ridge_month_effect_stacked.jpeg", p_month_stacked, width = 9, height = 5.5, dpi = 300)
 
 ```
 
@@ -832,224 +892,269 @@ library(ggplot2)
 library(ggridges)
 
 s <- fit$sims.list
-stopifnot(!is.null(s$beta_mon_call),
-          !is.null(s$beta_mon_dip))
+stopifnot(!is.null(s$beta_mon_call), !is.null(s$beta_mon_dip))
 
-# Number of months in the model (usually 12)
+# months
 nmon <- ncol(as.data.frame(s$beta_mon_call))
 month_labs <- month.name[seq_len(nmon)]
 
-# ---- Build long posterior by METHOD × MONTH (coefficients on logit scale) ----
-df_call <- as.data.frame(s$beta_mon_call)
-names(df_call) <- month_labs
-df_call <- df_call %>%
-  pivot_longer(everything(), names_to = "Month", values_to = "Estimate") %>%
-  mutate(Method = "Call")
+# long posterior by METHOD × MONTH (logit scale)
+df_call <- as.data.frame(s$beta_mon_call); names(df_call) <- month_labs
+df_dip  <- as.data.frame(s$beta_mon_dip ); names(df_dip)  <- month_labs
 
-df_dip <- as.data.frame(s$beta_mon_dip)
-names(df_dip) <- month_labs
-df_dip <- df_dip %>%
-  pivot_longer(everything(), names_to = "Month", values_to = "Estimate") %>%
-  mutate(Method = "Dip")
-
-post_month <- bind_rows(df_call, df_dip)
-
-# Include Egg if present
-if (!is.null(s$beta_mon_egg)) {
-  df_egg <- as.data.frame(s$beta_mon_egg)
-  names(df_egg) <- month_labs
-  df_egg <- df_egg %>%
-    pivot_longer(everything(), names_to = "Month", values_to = "Estimate") %>%
-    mutate(Method = "Egg")
-  post_month <- bind_rows(post_month, df_egg)
-}
-
-# Order facets and months
-meth_levels <- c("Call","Dip","Egg")
-post_month$Method <- factor(post_month$Method,
-                            levels = meth_levels[meth_levels %in% unique(post_month$Method)])
-post_month$Month <- factor(post_month$Month, levels = month_labs)
-
-xr <- range(post_month$Estimate, na.rm = TRUE)
-
-p_month_split <- ggplot(post_month, aes(x = Estimate, y = Month, fill = after_stat(x))) +
-  geom_density_ridges_gradient(scale = 2, rel_min_height = 0.01, size = 0.3) +
-  scale_fill_viridis_c(name = "Estimate", option = "D",
-                       limits = xr, oob = scales::squish) +
-  facet_wrap(~ Method, ncol = 1) +
-  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.4, colour = "grey40") +
-  coord_cartesian(xlim = xr) +
-  labs(x = "Month effect on Detection (logit scale)", y = NULL) +
-  theme_minimal(base_size = 13) +
-  theme(panel.grid = element_blank(), strip.text = element_text(face = "bold"))
-
-
-print(p_month_split)
-# ggsave("ridge_month_effect_by_month.jpeg", p_month_split, width = 9, height = 10, dpi = 300)
-
-```
-
-
-```{r}
-library(dplyr)
-library(ggplot2)
-library(ggridges)
-
-s <- fit$sims.list
-stopifnot(!is.null(s$beta_yr_call),
-          !is.null(s$beta_yr_dip))
-
-post_year <- bind_rows(
-  data.frame(Estimate = as.vector(s$beta_yr_call),
-             Method   = "Call",
-             Level    = ""),
-  data.frame(Estimate = as.vector(s$beta_yr_dip),
-             Method   = "Dip",
-             Level    = "")
+post_month <- bind_rows(
+  df_call |> pivot_longer(everything(), names_to = "Month", values_to = "Estimate") |> mutate(Method = "Call"),
+  df_dip  |> pivot_longer(everything(), names_to = "Month", values_to = "Estimate") |> mutate(Method = "Dip")
 )
 
-# Include Egg only if present
-if (!is.null(s$beta_yr_egg)) {
-  post_year <- bind_rows(
-    post_year,
-    data.frame(Estimate = as.vector(s$beta_yr_egg),
-               Method   = "Egg",
-               Level    = "")
+if (!is.null(s$beta_mon_egg)) {
+  df_egg <- as.data.frame(s$beta_mon_egg); names(df_egg) <- month_labs
+  post_month <- bind_rows(
+    post_month,
+    df_egg |> pivot_longer(everything(), names_to = "Month", values_to = "Estimate") |> mutate(Method = "Egg")
   )
 }
 
-# Order panels Call–Dip–Egg (only those that exist)
+# order
 meth_levels <- c("Call","Dip","Egg")
-post_year$Method <- factor(
-  post_year$Method,
-  levels = meth_levels[meth_levels %in% unique(post_year$Method)]
-)
+post_month$Method <- factor(post_month$Method,
+                            levels = meth_levels[meth_levels %in% unique(post_month$Method)])
+post_month$Month  <- factor(post_month$Month, levels = month_labs)
 
-xr <- range(post_year$Estimate, na.rm = TRUE)
+# relabel for nicer facet strip text
+post_month$Method <- dplyr::recode(post_month$Method,
+                                   "Call" = "Call Files",
+                                   "Dip"  = "Dipnet Surveys",
+                                   "Egg"  = "Egg Mass Surveys")
 
-p_year_effect <- ggplot(post_year, aes(x = Estimate, y = Level, fill = after_stat(x))) +
-  geom_density_ridges_gradient(scale = 1.6, rel_min_height = 0.01, size = 0.3) +
-  scale_fill_viridis_c(name = "Estimate", limits = xr, oob = scales::squish) +
-  facet_wrap(~ Method, ncol = 2) +
-  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.4, colour = "grey40") +
-  coord_cartesian(xlim = xr) +
-  labs(x = "Year effect on detection (logit scale)", y = NULL,
-       title = "Posterior ridgeplots — year effect on detection") +
-  theme_minimal(base_size = 13) +
-  theme(panel.grid = element_blank(),
-        strip.text = element_text(face = "bold"),
-        axis.text.y = element_blank())
+# axes / guides
+x_lims   <- c(-15, 15)
+x_breaks <- seq(-10, 10, by = 10)
+y_lines  <- seq_along(levels(post_month$Month))
 
-print(p_year_effect)
-# ggsave("ridge_year_effect_detection.jpeg", p_year_effect, width = 9, height = 5.5, dpi = 300)
+p_month_cols <- ggplot(post_month, aes(x = Estimate, y = Month, fill = after_stat(x))) +
+  # background guides
+  geom_vline(xintercept = x_breaks, colour = "grey80", linewidth = 0.1) +
+  geom_hline(yintercept = y_lines, colour = "grey85", linewidth = 0.1) +
 
-```
+  # ridges
+  geom_density_ridges_gradient(scale = 1.8, rel_min_height = 0.01, size = 0.3) +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey30", linewidth = 0.7) +
 
+  # scales
+  scale_x_continuous("Estimate (logit)", limits = x_lims, breaks = x_breaks,
+                     expand = expansion(add = c(0.7, 0.7))) +
+  scale_fill_viridis_c(name = "Estimate", option = "D",
+                       limits = x_lims, oob = scales::squish) +
 
-```{r}
-library(dplyr)
-library(tidyr)
-library(ggplot2)
-library(ggridges)
-
-s <- fit$sims.list
-stopifnot(!is.null(s$beta_yr_call),
-          !is.null(s$beta_yr_dip))
-
-# Figure out year labels from your earlier pipeline; fall back if missing
-n_yr <- ncol(as.data.frame(s$beta_yr_call))
-year_labs <- if (exists("all_years")) as.character(all_years) else paste0("Year_", seq_len(n_yr))
-
-# ---- Build long posterior by METHOD × YEAR (coefficients on logit scale) ----
-df_call_y <- as.data.frame(s$beta_yr_call)
-names(df_call_y) <- year_labs
-df_call_y <- df_call_y %>%
-  pivot_longer(everything(), names_to = "Year", values_to = "Estimate") %>%
-  mutate(Method = "Call")
-
-df_dip_y <- as.data.frame(s$beta_yr_dip)
-names(df_dip_y) <- year_labs
-df_dip_y <- df_dip_y %>%
-  pivot_longer(everything(), names_to = "Year", values_to = "Estimate") %>%
-  mutate(Method = "Dip")
-
-post_year_split <- bind_rows(df_call_y, df_dip_y)
-
-# Include Egg if present
-if (!is.null(s$beta_yr_egg)) {
-  df_egg_y <- as.data.frame(s$beta_yr_egg)
-  names(df_egg_y) <- year_labs
-  df_egg_y <- df_egg_y %>%
-    pivot_longer(everything(), names_to = "Year", values_to = "Estimate") %>%
-    mutate(Method = "Egg")
-  post_year_split <- bind_rows(post_year_split, df_egg_y)
-}
-
-# Order facets and year labels
-meth_levels <- c("Call","Dip","Egg")
-post_year_split$Method <- factor(
-  post_year_split$Method,
-  levels = meth_levels[meth_levels %in% unique(post_year_split$Method)]
-)
-post_year_split$Year <- factor(post_year_split$Year, levels = year_labs)
-
-xr <- range(post_year_split$Estimate, na.rm = TRUE)
-
-p_year_split <- ggplot(post_year_split, aes(x = Estimate, y = Year, fill = after_stat(x))) +
-  geom_density_ridges_gradient(scale = 2, rel_min_height = 0.01, size = 0.3) +
-  scale_fill_viridis_c(name = "Estimate", limits = xr, oob = scales::squish) +
-  facet_wrap(~ Method, ncol = 1) +
-  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.4, colour = "grey40") +
-  coord_cartesian(xlim = xr) +
-  labs(x = "Year effect on detection (logit scale)", y = NULL) +
+  facet_grid(cols = vars(Method)) +
+  labs(y = NULL, title = "Posterior Distributions of Month Effects on Detection by Month") +
   theme_minimal(base_size = 13) +
   theme(panel.grid = element_blank(),
         strip.text = element_text(face = "bold"))
 
-print(p_year_split)
-# ggsave("ridge_year_effect_by_year.jpeg", p_year_split, width = 9, height = 6 + 0.4*length(year_labs), dpi = 300)
+p_month_cols
+ggsave("ridge_month_effect_by_month_cols.jpeg", p_month_cols, width = 10, height = 7, dpi = 300)
+
 
 ```
 
 
 ```{r}
-# --- ψ-based predicted occupancy by wetland (2024 or latest), with CIs ---
+library(dplyr)
+library(ggplot2)
+library(ggridges)
+library(scales)
 
-# pick 2024 if present, else latest analyzed year
-t_sel <- if (any(all_years == 2024)) which(all_years == 2024) else length(all_years)
+s <- fit$sims.list
+stopifnot(!is.null(s$beta_yr_call), !is.null(s$beta_yr_dip))
 
-stopifnot(!is.null(fit$sims.list$psi))
-psi_draws_t <- fit$sims.list$psi[,,, t_sel]   # dims: [iter, site, wet]
-stopifnot(length(dim(psi_draws_t)) == 3)
+post_year <- bind_rows(
+  data.frame(Estimate = as.vector(s$beta_yr_call), Method = "Call"),
+  data.frame(Estimate = as.vector(s$beta_yr_dip),  Method = "Dip")
+)
+if (!is.null(s$beta_yr_egg)) {
+  post_year <- bind_rows(post_year,
+    data.frame(Estimate = as.vector(s$beta_yr_egg), Method = "Egg"))
+}
 
-# map WetID -> WetlandID
-wet_key <- wet_index %>% dplyr::select(Site, WetID, WetlandID)
+# factor order, then relabel strips
+lvl <- c("Call","Dip","Egg"); post_year$Method <- factor(post_year$Method, levels = lvl[lvl %in% unique(post_year$Method)])
+post_year$Method <- dplyr::recode(post_year$Method,
+                                  "Call"="Call Files","Dip"="Dipnet Surveys","Egg"="Egg Mass Surveys")
 
-# summarize ψ draws per site/wetland
-rows <- vector("list", length = sum(nWetlands_vec))
-k <- 0L
+# symmetric limits & nice breaks
+xr <- range(post_year$Estimate, na.rm = TRUE)
+lim <- max(5, ceiling(max(abs(xr))))
+x_lims   <- c(-lim, lim)
+x_breaks <- pretty(c(-20, 20), n = 5)
+y_lines  <- seq_along(levels(post_year$Method))
+
+p_year_stacked <- ggplot(post_year, aes(x = Estimate, y = Method, fill = after_stat(x))) +
+  # background guides
+  geom_vline(xintercept = x_breaks, colour = "grey80", linewidth = 0.1) +
+ 
+  geom_hline(yintercept = y_lines, colour = "grey85", linewidth = 0.1) +
+  # ridges
+  geom_density_ridges_gradient(scale = 1.3, rel_min_height = 0.01, size = 0.35) +
+   geom_vline(xintercept = 0, linetype = "dashed", colour = "grey20", linewidth = 0.8) +
+  # axes/palette
+  scale_x_continuous("Estimate (logit)", limits = c(-20, 20), breaks = x_breaks,
+                     expand = expansion(add = c(0.7, 0.7))) +
+  scale_fill_viridis_c(name = "Estimate", limits = x_lims, oob = scales::squish) +
+  labs(y = NULL, title = "Posterior Distributions of Year Effects on Detection") +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid = element_blank())
+
+p_year_stacked
+ggsave("ridge_year_effect_stacked.jpeg", p_year_stacked, width = 9, height = 5.5, dpi = 300)
+
+
+```
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggridges)
+library(scales)
+
+s <- fit$sims.list
+stopifnot(!is.null(s$beta_yr_call), !is.null(s$beta_yr_dip))
+
+# year labels
+n_yr <- ncol(as.data.frame(s$beta_yr_call))
+year_labs <- if (exists("all_years")) as.character(all_years) else paste0("Year_", seq_len(n_yr))
+
+# long: METHOD × YEAR
+df_call_y <- as.data.frame(s$beta_yr_call); names(df_call_y) <- year_labs
+df_dip_y  <- as.data.frame(s$beta_yr_dip ); names(df_dip_y)  <- year_labs
+
+post_year_split <- bind_rows(
+  df_call_y |> pivot_longer(everything(), names_to = "Year", values_to = "Estimate") |> mutate(Method = "Call"),
+  df_dip_y  |> pivot_longer(everything(), names_to = "Year", values_to = "Estimate") |> mutate(Method = "Dip")
+)
+if (!is.null(s$beta_yr_egg)) {
+  df_egg_y <- as.data.frame(s$beta_yr_egg); names(df_egg_y) <- year_labs
+  post_year_split <- bind_rows(
+    post_year_split,
+    df_egg_y |> pivot_longer(everything(), names_to = "Year", values_to = "Estimate") |> mutate(Method = "Egg")
+  )
+}
+
+# order + relabel methods
+lvl <- c("Call","Dip","Egg")
+post_year_split$Method <- factor(post_year_split$Method, levels = lvl[lvl %in% unique(post_year_split$Method)])
+post_year_split$Method <- dplyr::recode(post_year_split$Method,
+                                        "Call"="Call Files","Dip"="Dipnet Surveys","Egg"="Egg Mass Surveys")
+post_year_split$Year <- factor(post_year_split$Year, levels = year_labs)
+
+# symmetric limits & guides
+xr <- range(post_year_split$Estimate, na.rm = TRUE)
+lim <- max(5, ceiling(max(abs(xr))))
+x_lims   <- c(-lim, lim)
+x_breaks <- pretty(c(-20, 20), n = 5)
+y_lines  <- seq_along(levels(post_year_split$Year))
+
+p_year_cols <- ggplot(post_year_split, aes(x = Estimate, y = Year, fill = after_stat(x))) +
+  # background guides
+  geom_vline(xintercept = x_breaks, colour = "grey80", linewidth = 0.1) +
+  
+  geom_hline(yintercept = y_lines, colour = "grey85", linewidth = 0.1) +
+  # ridges
+  geom_density_ridges_gradient(scale = 1.8, rel_min_height = 0.01, size = 0.3) +
+  # axes/palette
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey20", linewidth = 0.8) +
+  scale_x_continuous("Estimate (logit)", limits = c(-20, 20), breaks = x_breaks,
+                     expand = expansion(add = c(0.7, 0.7))) +
+  scale_fill_viridis_c(name = "Estimate", limits = c(-20, 20), option = "D", oob = scales::squish) +
+  # one row of panels (Call Files | Dipnet Surveys | Egg Mass Surveys); Year axis appears once on left
+  facet_grid(cols = vars(Method)) +
+  labs(y = NULL, title = "Posterior Distributions of Year Effects on Detection by Year") +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid = element_blank(),
+        strip.text = element_text(face = "bold"))
+
+p_year_cols
+ggsave("ridge_year_effect_by_year_cols.jpeg", p_year_cols,
+      width = 10, height = 6 + 0.35*length(year_labs), dpi = 300)
+
+
+```
+
+
+```{r}
+# --- ψ violins by wetland, OVERALL across all years (equal-weight), with median + 80/95% CIs ---
+
+library(dplyr)
+library(ggplot2)
+library(purrr)
+
+stopifnot(!is.null(fit$sims.list$psi))  # dims: [iter, site, wetland, year]
+psi_all <- fit$sims.list$psi
+
+library(dplyr)
+library(ggplot2)
+library(purrr)
+
+stopifnot(!is.null(fit$sims.list$psi))  # psi dims: [iter, site, wetland, year]
+psi_all <- fit$sims.list$psi
+dims <- dim(psi_all)
+n_iter <- dims[1]
+
+# --- 1) Mean ψ over years per draw, computed slice-by-slice (robust) ---
+psi_draws_overall <- array(NA_real_, dim = c(n_iter, nSites, maxWetlands))
+
 for (j in seq_len(nSites)) {
   for (w in seq_len(nWetlands_vec[j])) {
-    v <- psi_draws_t[, j, w]
-    qs <- stats::quantile(v, probs = c(0.025, 0.10, 0.20, 0.50, 0.80, 0.90, 0.975), na.rm = TRUE)
-    k <- k + 1L
-    rows[[k]] <- data.frame(
-      Site       = as.character(site_levels[j]),
-      WetID      = w,
-      lo95       = qs[1],  lo90 = qs[2], lo80 = qs[3],
-      med        = qs[4],
-      hi80       = qs[5],  hi90 = qs[6], hi95 = qs[7],
-      pr_gt_0.5  = mean(v > 0.5, na.rm = TRUE),
-      stringsAsFactors = FALSE
-    )
+    # slice for this site/wetland across all years at once
+    sl <- psi_all[, j, w, , drop = TRUE]
+    # if only one year, `sl` is a vector; otherwise a matrix [iter x nYear]
+    v <- if (is.null(dim(sl))) as.numeric(sl) else rowMeans(sl, na.rm = TRUE)
+    # sanitize: drop non-finite, clamp to [0,1]
+    v[!is.finite(v)] <- NA_real_
+    v <- pmin(pmax(v, 0), 1)
+    psi_draws_overall[, j, w] <- v
   }
 }
-psi_wet <- dplyr::bind_rows(rows) %>%
+
+# 2) Map WetID -> WetlandID (for ordering/labels)
+wet_key <- wet_index %>% dplyr::select(Site, WetID, WetlandID)
+
+# 3) Summaries per wetland (over draws of the year-averaged ψ)
+rows <- list(); k <- 0L
+for (j in seq_len(nSites)) {
+  for (w in seq_len(nWetlands_vec[j])) {
+    v <- psi_draws_overall[, j, w]
+    v <- v[is.finite(v)]
+    k <- k + 1L
+    if (length(v)) {
+      qs <- stats::quantile(v, probs = c(0.025, 0.10, 0.20, 0.50, 0.80, 0.90, 0.975))
+      rows[[k]] <- data.frame(
+        Site       = as.character(site_levels[j]),
+        WetID      = w,
+        lo95 = qs[1], lo90 = qs[2], lo80 = qs[3],
+        med  = mean(v),
+        hi80 = qs[5], hi90 = qs[6], hi95 = qs[7],
+        pr_gt_0.5  = mean(v > 0.5)
+      )
+    } else {
+      # no valid draws for this wetland (keeps alignment; will be dropped later)
+      rows[[k]] <- data.frame(
+        Site = as.character(site_levels[j]), WetID = w,
+        lo95 = NA, lo90 = NA, lo80 = NA, med = NA, hi80 = NA, hi90 = NA, hi95 = NA,
+        pr_gt_0.5 = NA
+      )
+    }
+  }
+}
+
+psi_wet_overall <- dplyr::bind_rows(rows) %>%
   dplyr::left_join(wet_key, by = c("Site","WetID")) %>%
   dplyr::mutate(
     WetlandID_num = suppressWarnings(as.numeric(WetlandID)),
     WetlandID_f   = {
-      # order x by numeric WetlandID if available; fall back to WetID
       ord <- ifelse(is.na(WetlandID_num), WetID, WetlandID_num)
       factor(ifelse(is.na(WetlandID), paste0("W", WetID), WetlandID),
              levels = unique(ifelse(is.na(WetlandID),
@@ -1059,267 +1164,476 @@ psi_wet <- dplyr::bind_rows(rows) %>%
     predicted_occupied = med >= 0.5
   )
 
-# plot: points = median ψ; thick line = 80% CI; thin line = 95% CI; color = predicted occupied
-library(ggplot2)
+# 4) Long draws for violins, sanitized & (optionally) downsampled
+downsample_n <- 4000L
+make_long_one <- function(j, w) {
+  v <- psi_draws_overall[, j, w]
+  v <- v[is.finite(v)]
+  if (!length(v)) return(data.frame(Site = as.character(site_levels[j]),
+                                    WetID = w, psi = numeric(0)))
+  if (!is.na(downsample_n) && length(v) > downsample_n) {
+    set.seed(42); v <- sample(v, downsample_n)
+  }
+  data.frame(Site = as.character(site_levels[j]), WetID = w, psi = v)
+}
 
-p_psi_wet <- ggplot(psi_wet, aes(x = WetlandID_f, y = med)) +
-  geom_hline(yintercept = 0.5, linetype = "dashed", linewidth = 0.5, alpha = 0.6) +
-  geom_linerange(aes(ymin = lo95, ymax = hi95), linewidth = 0.6, alpha = 0.25) +
-  geom_linerange(aes(ymin = lo80, ymax = hi80), linewidth = 1.2, alpha = 0.6) +
-  geom_point(aes(color = predicted_occupied), size = 2.8) +
-  scale_color_manual(values = c(`TRUE` = "#1f78b4", `FALSE` = "grey40"),
-                     name = "Predicted occupied\n(median ψ ≥ 0.5)") +
-  facet_wrap(~ Site, ncol = 1, scales = "free_x") +
-  scale_y_continuous(limits = c(0, 1), expand = expansion(mult = c(0, 0.02))) +
-  labs(
-    x = "Wetland ID",
-    y = "Occupancy probability (ψ)",
-    title = paste0("Predicted occupancy by wetland — ", all_years[t_sel])
-  ) +
-  theme_classic(base_size = 12) +
-  theme(
-    legend.position = "top",
-    axis.text.x = element_text(angle = 45, hjust = 1)
+psi_long_overall <- purrr::map_dfr(seq_len(nSites), function(j) {
+  purrr::map_dfr(seq_len(nWetlands_vec[j]), function(w) make_long_one(j, w))
+}) %>%
+  dplyr::left_join(
+    psi_wet_overall %>% dplyr::select(Site, WetID, WetlandID, WetlandID_f, predicted_occupied),
+    by = c("Site","WetID")
   )
+# --- DIAGNOSTIC: which plotted labels correspond to actual detections? ---
 
-print(p_psi_wet)
-# ggsave("psi_predicted_occupied_by_wetland.png", p_psi_wet, width = 9, height = 6.5, dpi = 300)
+# 1) any detection by wetland (across all months/years), from the arrays you already have
+any_det <- (y_dip + y_call + y_egg) > 0  # dims: [site, wet, month, year]
+det_by_wet <- lapply(seq_len(nSites), function(j) {
+  if (nWetlands_vec[j] == 0) return(dplyr::tibble())
+  has_det <- apply(any_det[j, 1:nWetlands_vec[j], , , drop = FALSE], 2, any)
+  dplyr::tibble(Site = as.character(site_levels[j]),
+                WetID = seq_len(nWetlands_vec[j]),
+                any_det = as.logical(has_det))
+}) |> dplyr::bind_rows()
 
-```
+# 2) join to psi summaries + labels used in the plot
+psi_wet_overall <- psi_wet_overall |>
+  dplyr::left_join(det_by_wet, by = c("Site","WetID")) |>
+  dplyr::mutate(any_det = dplyr::coalesce(any_det, FALSE))
 
-```{r}
-library(dplyr); library(tidyr); library(ggplot2)
-
-# Posterior mean of z (probability of being occupied)
-z_mean <- apply(fit$sims.list$z, c(2,3,4), mean)  # [site, wetland, year]
-
-dimnames(z_mean) <- list(
-  Site = as.character(site_levels),
-  WetID = paste0("W", seq_len(dim(z_mean)[2])),
-  Year = as.character(all_years)
+# 3) sanity table for YOUR list
+your_list <- list(
+  "Ceylon WMA" = c("41","41B","59"),
+  "Jones Center Ichauway" = c("15","21","37","42","46","49","50","51","53","55")
 )
+check_tbl <- dplyr::bind_rows(lapply(names(your_list), function(s) {
+  dplyr::tibble(Site = s, WetlandID = your_list[[s]])
+})) |>
+  dplyr::left_join(psi_wet_overall, by = c("Site","WetlandID")) |>
+  dplyr::select(Site, WetlandID, WetID, any_det, med, lo80, hi80)
 
-z_df <- as.data.frame.table(z_mean, responseName = "Pocc") %>%
-  mutate(WetID = as.integer(sub("^W","", WetID))) %>%
-  left_join(wet_index, by = c("Site","WetID")) %>%
-  filter(!is.na(WetlandID))
+print(check_tbl, n = Inf)
 
-ggplot(z_df, aes(x = Year, y = WetlandID, fill = Pocc)) +
-  geom_tile() +
-  scale_fill_viridis_c(name = "P(occupied)", option = "C", limits = c(0,1)) +
-  facet_wrap(~ Site, scales = "free_y") +
-  labs(x = NULL, y = "Wetland ID", title = "Latent occupancy (z)") +
-  theme_minimal(base_size = 12) +
-  theme(panel.grid = element_blank())
+# 5) Plot (tell geoms to ignore any leftover NAs)
+p_psi_violin_overall <- ggplot(psi_long_overall, aes(x = WetlandID_f, y = psi)) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", linewidth = 0.5, colour = "grey60") +
+  geom_violin(aes(fill = predicted_occupied), trim = FALSE, scale = "width",
+              width = 0.85, colour = "grey35", alpha = 0.85, na.rm = TRUE) +
+  geom_linerange(data = psi_wet_overall, aes(x = WetlandID_f, ymin = lo95, ymax = hi95),
+                 linewidth = 0.6, alpha = 0.25, inherit.aes = FALSE, na.rm = TRUE) +
+  geom_linerange(data = psi_wet_overall, aes(x = WetlandID_f, ymin = lo80, ymax = hi80),
+                 linewidth = 1.2, alpha = 0.6, inherit.aes = FALSE, na.rm = TRUE) +
+   
+  geom_point(data = psi_wet_overall, aes(x = WetlandID_f, y = med),
+             size = 2.2, colour = "black", inherit.aes = FALSE, na.rm = TRUE) +
+
+  scale_fill_manual(values = c(`TRUE` = "#1f78b4", `FALSE` = "grey70"),
+                    name = "Predicted occupied\n(overall median ψ ≥ 0.5)") +
+  facet_wrap(~ Site, ncol = 1, scales = "free_x") +
+  scale_y_continuous(limits = c(0, 1), expand = expansion(mult = c(0, 0.02)),
+                     name = expression("Occupancy Probability"(psi))) +
+  labs(x = "Wetland ID",
+       title = "Predicted Occupancy Probability by Wetland (ψ)") +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.spacing = grid::unit(1.2, "lines"))
+
+print(p_psi_violin_overall)
+ggsave("psi_posterior_violins_by_wetland_overall.png",
+       p_psi_violin_overall, width = 10, height = 7, dpi = 300)
+
+# Optional: quick report so you can see if any wetlands had zero valid draws
+bad_wets <- psi_long_overall %>%
+  dplyr::group_by(Site, WetID, WetlandID) %>%
+  dplyr::summarise(n_draws = dplyr::n(), .groups = "drop") %>%
+  dplyr::filter(n_draws == 0)
+if (nrow(bad_wets)) {
+  message("Wetlands with no valid ψ draws (not plotted):")
+  print(bad_wets)
+}
 
 ```
+
 ```{r}
+
+# --- Overall ψ maps by site, with shifted viridis palette ---
+
 library(sf)
 library(dplyr)
-library(ggplot2)
 library(stringr)
-library(ggspatial)  
-library(maptiles)   # -> get_tiles()
-library(terra)      # raster backend for maptiles
+library(ggplot2)
+library(maptiles)
+library(terra)
 library(tidyterra)
 
-# Force knitr to write figure files to a normal folder during render
-knitr::opts_chunk$set(dev = "png", dpi = 300, fig.path = "fig-rmd/", fig.retina = 2, warning = FALSE, message = FALSE)
-options(bitmapType = "cairo")  # avoids Quartz hiccups on macOS
-# pick 2024 (or use yr_sel <- tail(all_years, 1) for latest)
-yr_sel <- "2024"
-z_wet <- z_df %>%
-  dplyr::filter(Year == yr_sel) %>%
-  dplyr::select(Site, WetID, WetlandID, Pocc)
+# 1) Build OVERALL ψ per wetland (equal-weight across years)
+stopifnot(!is.null(fit$sims.list$psi))  # dims: [iter, site, wetland, year]
+psi_all <- fit$sims.list$psi
 
-ceylon_study <- st_read("ceylon_wetlands_subset.shp", quiet = TRUE) %>%
-  mutate(WetlandID = as.character(WetlandID), Site = "Ceylon WMA")
+# Average across the year dimension inside each draw -> [iter, site, wetland]
+psi_draws_overall <- apply(psi_all, c(1, 2, 3), mean, na.rm = TRUE)
 
-jones_study  <- st_read("jones_study_wetlands.shp", quiet = TRUE) %>%
-  mutate(WetlandID = as.character(WetlandID), Site = "Jones Center Ichauway")
+# Summarize per site/wetland
+summ_overall <- lapply(seq_len(nSites), function(j){
+  lapply(seq_len(nWetlands_vec[j]), function(w){
+    v  <- psi_draws_overall[, j, w]
+    qs <- stats::quantile(v, c(0.025,0.10,0.20,0.50,0.80,0.90,0.975), na.rm=TRUE)
+    data.frame(Site = as.character(site_levels[j]), WetID = w,
+               lo95 = qs[1], lo90 = qs[2], lo80 = qs[3],
+               med  = qs[4],
+               hi80 = qs[5], hi90 = qs[6], hi95 = qs[7],
+               stringsAsFactors = FALSE)
+  }) |> bind_rows()
+}) |> bind_rows()
 
-cey_boundary <- st_read("ceylon_boundary.shp", quiet = TRUE)
-if ("NAME" %in% names(cey_boundary)) {
-  cey_boundary <- cey_boundary %>% filter(toupper(NAME) == "CEYLON WMA")
-} else if ("Name" %in% names(cey_boundary)) {
-  cey_boundary <- cey_boundary %>% filter(toupper(Name) == "CEYLON WMA")
-} else stop("`ceylon_boundary.shp` must have NAME or Name field to filter on.")
+wet_key <- wet_index %>% select(Site, WetID, WetlandID)
+psi_wet_overall <- summ_overall %>%
+  left_join(wet_key, by = c("Site","WetID")) %>%
+  mutate(WetlandID = as.character(WetlandID))
 
-jon_boundary <- st_read("jones_land.shp", quiet = TRUE)
+s_wet <- psi_wet_overall %>%
+  select(Site, WetlandID, med) %>%
+  mutate(WetlandID = as.character(WetlandID))
 
-```
-
-```{r}
-# --- Inputs expected already in workspace ---------------------------------
-# z_wet (Site, WetID, WetlandID, Pocc or similar)
-# ceylon_study (sf polygons), jones_study (sf polygons)
-# cey_boundary (sf; raw boundary), jon_boundary (sf)
-# yr_sel (character year like "2024")
-library(sf); library(dplyr); library(stringr)
-library(ggplot2)
-library(maptiles); library(terra); library(tidyterra)
-
-# 1) Canonicalize WetlandID and join P(occ) for the chosen year
+# Canonicalize IDs
 canon_id <- function(x) as.character(x) |> str_trim() |> str_replace("\\.0+$","") |> toupper()
 
-prob_col <- intersect(c("Pocc","med","z_mean","psi_mean","psi","p"), names(z_wet))[1]
+prob_col <- intersect(c("Pocc","med","z_mean","psi_mean","psi","p"), names(s_wet))[1]
 stopifnot(length(prob_col) == 1)
 
-zw <- z_wet |>
+sw <- s_wet %>%
   mutate(
     Site = recode(as.character(Site),
                   "Ceylon" = "Ceylon WMA",
                   "Jones Center" = "Jones Center Ichauway",
                   .default = as.character(Site)),
     WetlandID = canon_id(WetlandID),
-    Pocc = pmin(pmax(.data[[prob_col]], 0), 1)
-  ) |>
-  select(Site, WetlandID, Pocc)
+    Pocc = pmin(pmax(.data[[prob_col]], 0), 1)   # overall ψ (median)
+  ) %>% select(Site, WetlandID, Pocc)
 
-cey_poly <- ceylon_study |> mutate(WetlandID = canon_id(WetlandID))
-jon_poly <- jones_study  |> mutate(WetlandID = canon_id(WetlandID))
+# 2) Read wetlands and boundaries
+ceylon_study <- st_read("ceylon_wetlands_subset.shp", quiet = TRUE) %>%
+  mutate(WetlandID = canon_id(WetlandID), Site = "Ceylon WMA")
+jones_study  <- st_read("jones_study_wetlands.shp", quiet = TRUE) %>%
+  mutate(WetlandID = canon_id(WetlandID), Site = "Jones Center Ichauway")
 
-cey_poly_p <- cey_poly |> left_join(filter(zw, Site == "Ceylon WMA"),             by = "WetlandID")
-jon_poly_p <- jon_poly |> left_join(filter(zw, Site == "Jones Center Ichauway"), by = "WetlandID")
-
-# 2) Boundary prep — filter Ceylon by NAME and dissolve both to single-part outlines
+cey_boundary <- st_read("ceylon_boundary.shp", quiet = TRUE)
 if ("NAME" %in% names(cey_boundary)) {
-  cey_boundary <- cey_boundary |> filter(toupper(NAME) == "CEYLON WMA")
+  cey_boundary <- cey_boundary %>% filter(toupper(NAME) == "CEYLON WMA")
 } else if ("Name" %in% names(cey_boundary)) {
-  cey_boundary <- cey_boundary |> filter(toupper(Name) == "CEYLON WMA")
+  cey_boundary <- cey_boundary %>% filter(toupper(Name) == "CEYLON WMA")
 }
+jon_boundary <- st_read("jones_land.shp", quiet = TRUE)
 
+# Dissolve to single outline
 dissolve_boundary <- function(x){
-  x |>
-    st_make_valid() |>
-    mutate(.grp = 1L) |>
-    group_by(.grp) |>
-    summarise(geometry = st_union(geometry), .groups = "drop") |>
-    select(-.grp)
+  x |> st_make_valid() |> mutate(.grp = 1L) |> group_by(.grp) |>
+    summarise(geometry = st_union(geometry), .groups="drop") |> select(-.grp)
 }
 cey_boundary_d <- dissolve_boundary(cey_boundary)
 jon_boundary_d <- dissolve_boundary(jon_boundary)
 
-# 3) Satellite map function (no max_tiles arg)
+# Join wetlands with ψ
+cey_poly_p <- ceylon_study %>% left_join(filter(sw, Site=="Ceylon WMA"), by="WetlandID")
+jon_poly_p <- jones_study  %>% left_join(filter(sw, Site=="Jones Center Ichauway"), by="WetlandID")
+
+# 3) Mapping function with shifted viridis
 site_satellite_map <- function(boundary_sf, wetlands_sf, title_txt,
-                               provider = "Esri.WorldImagery", zoom = 16,legend_title = expression(z~"(occupancy)")) {
-  # Fetch tiles (Web Mercator), cropped to boundary bbox
-  r <- maptiles::get_tiles(boundary_sf, provider = provider, zoom = zoom,
-                           crop = TRUE, cachedir = "tile-cache")
-
-  # Reproject vectors to raster CRS and mask imagery to the exact boundary
-  wm_crs <- sf::st_crs(terra::crs(r, proj = TRUE))
-  boundary_wm <- sf::st_transform(boundary_sf, wm_crs)
-  wetlands_wm <- sf::st_transform(wetlands_sf, wm_crs)
+                               provider="Esri.WorldImagery", zoom=16,
+                               legend_title=expression(psi~"(occupancy)")) {
+  r <- maptiles::get_tiles(boundary_sf, provider=provider, zoom=zoom,
+                           crop=TRUE, cachedir="tile-cache")
+  wm_crs <- st_crs(terra::crs(r, proj=TRUE))
+  boundary_wm <- st_transform(boundary_sf, wm_crs)
+  wetlands_wm <- st_transform(wetlands_sf, wm_crs)
   r <- terra::mask(r, terra::vect(boundary_wm))
-
+  
   ggplot() +
+ 
     tidyterra::geom_spatraster_rgb(data = r) +
-    # subtle halo so wetlands pop on imagery
-    #geom_sf(data = wetlands_wm, color = "white", linewidth = 0.0, fill = NA) +
-        geom_sf(data = dplyr::filter(wetlands_wm, !is.na(Pocc)),
-            aes(fill = Pocc), color = NA) +
+    # filled wetlands WITH white outline
+    geom_sf(data = dplyr::filter(wetlands_wm, !is.na(Pocc)),
+            aes(fill = Pocc), color = "white", size = 0.05) +
+    # wetlands with no Pocc still get a white outline
     geom_sf(data = dplyr::filter(wetlands_wm,  is.na(Pocc)),
-            fill = "grey80", color = NA) +
+            fill = "grey80", color = "white", size = 0.05) +
+    # site boundary
     geom_sf(data = boundary_wm, fill = NA, color = "black", linewidth = 1.1) +
-    #scale_fill_gradientn(colors = rev(heat.colors(256)), limits = c(0,1), name = "P(occ)")+
-    scale_fill_viridis_c(option = "C", begin = 0.3, end = 0.95,limits = c(0, 1), name = legend_title) +
-    labs(title = title_txt, x = NULL, y = NULL) +
-    coord_sf(expand = FALSE, crs = wm_crs, datum = NA) +
-    theme_void(base_size = 12) +
-    theme(plot.title = element_text(face = "bold", hjust = 0.5),
-          legend.position = "right",
-          plot.background = element_rect(fill = "white", color = NA))
+    scale_fill_viridis_c(option = "C", limits = c(0,1),
+                         begin = 0.15, end = 1,   # shifted away from dark purple
+                         name = legend_title, na.value = "grey90") +
+
+    labs(title=title_txt, x=NULL, y=NULL) +
+    coord_sf(expand=FALSE, crs=wm_crs, datum=NA) +
+    theme_void(base_size=12) +
+theme(
+  plot.title = element_text(face = "bold", hjust = 0.5, margin = margin(b = 10)), 
+  plot.title.position = "plot",   # moves the title relative to the entire plot area
+  legend.position = "right",
+  plot.background = element_rect(fill = "white", color = NA),
+  plot.margin = margin(t = 15, r = 5, b = 5, l = 5)  # extra padding around the plot
+)
+
 }
 
-# 4) Make sure tile cache exists and draw (separate maps)
-dir.create("tile-cache", showWarnings = FALSE)
-
-year_lab <- yr_sel
-p_ceylon <- site_satellite_map(cey_boundary_d, cey_poly_p,
-                               paste0("Ceylon WMA — ", year_lab), zoom = 16)
-p_jones  <- site_satellite_map(jon_boundary_d,  jon_poly_p,
-                               paste0("Jones Center Ichauway — ", year_lab), zoom = 15)
+# 4) Draw maps
+dir.create("tile-cache", showWarnings=FALSE)
+p_ceylon <- site_satellite_map(cey_boundary_d, cey_poly_p, "Occupancy Probability — Ceylon WMA")
+p_jones  <- site_satellite_map(jon_boundary_d,  jon_poly_p, "Occupancy Probability — Jones Center Ichauway")
 
 print(p_ceylon)
 print(p_jones)
+# Save Ceylon map
+ggsave("occupancy_ceylon.png", p_ceylon,
+       width = 8, height = 8, dpi = 300)
+
+# Save Jones map
+ggsave("occupancy_jones.png", p_jones,
+       width = 8, height = 8, dpi = 300)
 
 
 ```
-
 ```{r}
-# --- Use psi_wet to make the ψ map ---
+# --- Overall results: totals, per-site counts, wetlands with detections ---
 
-# 1) Build the minimal table your map code expects
-#    (it looks for one of c("Pocc","med","z_mean","psi_mean","psi","p"); we have "med")
-s_wet <- psi_wet %>%
-  dplyr::select(Site, WetlandID, med) %>%
-  dplyr::mutate(WetlandID = as.character(WetlandID))
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(stringr)
 
-# 2) Reuse your existing map pipeline unchanged (just optional legend rename)
-canon_id <- function(x) as.character(x) |>
-  stringr::str_trim() |>
-  stringr::str_replace("\\.0+$","") |>
-  toupper()
-
-prob_col <- intersect(c("Pocc","med","z_mean","psi_mean","psi","p"), names(s_wet))[1]
-stopifnot(length(prob_col) == 1)
-
-sw <- s_wet %>%
-  dplyr::mutate(
-    Site = dplyr::recode(as.character(Site),
-                         "Ceylon" = "Ceylon WMA",
-                         "Jones Center" = "Jones Center Ichauway",
-                         .default = as.character(Site)),
-    WetlandID = canon_id(WetlandID),
-    Pocc = pmin(pmax(.data[[prob_col]], 0), 1)   # this is ψ (median) now
-  ) %>%
-  dplyr::select(Site, WetlandID, Pocc)
-
-cey_poly <- ceylon_study %>% dplyr::mutate(WetlandID = canon_id(WetlandID))
-jon_poly <- jones_study  %>% dplyr::mutate(WetlandID = canon_id(WetlandID))
-
-cey_poly_p <- cey_poly %>% dplyr::left_join(dplyr::filter(sw, Site == "Ceylon WMA"),             by = "WetlandID")
-jon_poly_p <- jon_poly %>% dplyr::left_join(dplyr::filter(sw, Site == "Jones Center Ichauway"), by = "WetlandID")
-
-# (Optional) relabel legend to show ψ
-site_satellite_map <- function(boundary_sf, wetlands_sf, title_txt,
-                               provider = "Esri.WorldImagery", zoom = 16,
-                               legend_title = expression(psi~"(occupancy)")) {
-  r <- maptiles::get_tiles(boundary_sf, provider = provider, zoom = zoom,
-                           crop = TRUE, cachedir = "tile-cache")
-  wm_crs <- sf::st_crs(terra::crs(r, proj = TRUE))
-  boundary_wm <- sf::st_transform(boundary_sf, wm_crs)
-  wetlands_wm <- sf::st_transform(wetlands_sf, wm_crs)
-  r <- terra::mask(r, terra::vect(boundary_wm))
-
-  ggplot() +
-    tidyterra::geom_spatraster_rgb(data = r) +
-    #geom_sf(data = wetlands_wm, color = "white", linewidth = 0.05, fill = NA) +
-    geom_sf(data = dplyr::filter(wetlands_wm, !is.na(Pocc)),
-            aes(fill = Pocc), color = NA) +
-    geom_sf(data = dplyr::filter(wetlands_wm,  is.na(Pocc)),
-            fill = "grey80", color = NA) +
-    geom_sf(data = boundary_wm, fill = NA, color = "black", linewidth = 1.1) +
-    #scale_fill_gradientn(colors = rev(heat.colors(256)), limits = c(0,1), name = legend_title) +
-    scale_fill_viridis_c(option = "C", begin = 0.3, end = 0.95, limits = c(0, 1), name = legend_title) +
-    labs(title = title_txt, x = NULL, y = NULL) +
-    coord_sf(expand = FALSE, crs = wm_crs, datum = NA) +
-    theme_void(base_size = 12) +
-    theme(plot.title = element_text(face = "bold", hjust = 0.5),
-          legend.position = "right",
-          plot.background = element_rect(fill = "white", color = NA))
+# Helper to sum valid wetlands for a site
+sum_site <- function(Y, j) {
+  if (nWetlands_vec[j] == 0) return(0L)
+  sum(Y[j, 1:nWetlands_vec[j], , , drop = FALSE])
 }
 
-# 3) Draw the maps (same as before)
-dir.create("tile-cache", showWarnings = FALSE)
-p_ceylon <- site_satellite_map(cey_boundary_d, cey_poly_p,
-                               paste0("Ceylon WMA"), zoom = 16)
-p_jones  <- site_satellite_map(jon_boundary_d,  jon_poly_p,
-                               paste0("Jones Center Ichauway"), zoom = 15)
+# 0) Totals by method and overall (month-collapsed detections)
+total_dip  <- sum(y_dip)
+total_call <- sum(y_call)
+total_egg  <- sum(y_egg)
+total_all  <- total_dip + total_call + total_egg
 
-print(p_ceylon)
-print(p_jones)
+totals_tbl <- tibble(
+  Method = c("Dipnet", "Call files", "Egg masses", "ALL METHODS"),
+  Detections = c(total_dip, total_call, total_egg, total_all)
+)
+
+# 1) Per-site totals by method (sums of month-collapsed detections)
+per_site_method <- map_dfr(seq_len(nSites), function(j){
+  tibble(
+    Site = as.character(site_levels[j]),
+    Dipnet     = sum_site(y_dip,  j),
+    Call_files = sum_site(y_call, j),
+    Egg_masses = sum_site(y_egg,  j)
+  )
+}) %>% mutate(All_Methods = Dipnet + Call_files + Egg_masses)
+
+# 2) Wetlands with ≥1 detection (any method, any month/year)
+any_det <- (y_dip + y_call + y_egg) > 0
+
+wet_any_by_site <- map_dfr(seq_len(nSites), function(j){
+  if (nWetlands_vec[j] == 0) return(tibble())
+  # any detection across months & years for each wetland
+  any_wet <- apply(any_det[j, 1:nWetlands_vec[j], , , drop = FALSE], 2, any)
+  tibble(Site = as.character(site_levels[j]),
+         WetID = which(any_wet))
+})
+
+# Map WetID -> WetlandID labels
+wet_key <- wet_index %>% select(Site, WetID, WetlandID)
+
+wetlands_with_detections <- wet_any_by_site %>%
+  left_join(wet_key, by = c("Site","WetID")) %>%
+  mutate(
+    WetlandID_chr = as.character(WetlandID),
+    WetlandID_num = suppressWarnings(as.numeric(WetlandID_chr))
+  ) %>%
+  arrange(Site, is.na(WetlandID_num), WetlandID_num, WetlandID_chr) %>%
+  select(-WetlandID_num)
+
+
+# 3) Count of wetlands with detections per site
+wetland_counts_per_site <- wetlands_with_detections %>%
+  group_by(Site) %>%
+  summarise(Wetlands_with_detections = n(), .groups = "drop")
+
+# --- Pretty print summaries ---
+cat("\n=== OVERALL DETECTIONS (month-collapsed) ===\n")
+print(totals_tbl)
+
+cat("\n=== PER-SITE DETECTIONS (month-collapsed) ===\n")
+print(per_site_method)
+
+cat("\n=== NUMBER OF WETLANDS WITH ≥1 DETECTION PER SITE ===\n")
+print(wetland_counts_per_site)
+
+cat("\n=== WETLAND LISTS WITH ≥1 DETECTION ===\n")
+wlists <- wetlands_with_detections %>%
+  group_by(Site) %>%
+  summarise(Wetlands = paste0(sort(unique(WetlandID %||% paste0("W", WetID))), collapse = ", "),
+            .groups = "drop")
+print(wlists)
+
+# # --- (Optional) Save CSVs for the appendix / SI ---
+# readr::write_csv(totals_tbl,                  "results_overall_detection_totals.csv")
+# readr::write_csv(per_site_method,             "results_per_site_detection_totals.csv")
+# readr::write_csv(wetland_counts_per_site,     "results_wetland_counts_per_site.csv")
+# readr::write_csv(wetlands_with_detections,    "results_wetlands_with_any_detection.csv")
+# readr::write_csv(wlists,                      "results_wetland_lists_per_site.csv")
+
+```
+```{r}
+# --- Time summaries of detections by site / year / month (from arrays) ---
+
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(stringr)
+
+# Helper to turn an array into a long tibble
+# y/eff dims: [site, wetland, month, year]
+arr_to_df <- function(y, eff, method_name){
+  stopifnot(length(dim(y)) == 4, all(dim(y) == dim(eff)))
+
+  y_tbl   <- as.data.frame.table(y,   responseName = "det")
+  eff_tbl <- as.data.frame.table(eff, responseName = "eff")
+
+  df <- y_tbl %>%
+    rename(Var1y = Var1, Var2y = Var2, Var3y = Var3, Var4y = Var4) %>%
+    bind_cols(eff_tbl %>% select(eff)) %>%     # align row-for-row
+    mutate(
+      # convert factor indices to integer positions 1..n
+      site_i = as.integer(Var1y),
+      wet_i  = as.integer(Var2y),
+      mon_i  = as.integer(Var3y),
+      yr_i   = as.integer(Var4y),
+      det    = as.integer(det),
+      eff    = as.integer(eff)
+    ) %>%
+    # keep only surveyed cells
+    filter(eff > 0L) %>%
+    # drop padding wetlands beyond the real count at that site
+    group_by(site_i) %>%
+    filter(wet_i <= nWetlands_vec[site_i]) %>%
+    ungroup() %>%
+    mutate(
+      Site   = as.character(site_levels[site_i]),
+      Year   = all_years[yr_i],
+      MonthI = mon_i,
+      Month  = factor(month.name[MonthI], levels = month.name),
+      Method = method_name
+    ) %>%
+    select(Site, Year, Month, MonthI, Method, WetID = wet_i, det, eff)
+
+  df
+}
+
+
+df_call <- arr_to_df(y_call, effort_call, "Call")
+df_dip  <- arr_to_df(y_dip,  effort_dip,  "Dip")
+df_egg  <- arr_to_df(y_egg,  effort_egg,  "Egg")
+
+# Bind all methods
+df_all <- bind_rows(df_call, df_dip, df_egg)
+
+# -----------------------------
+# A) Years with any detection
+# -----------------------------
+years_with_detection_by_site_method <- df_all %>%
+  group_by(Site, Method, Year) %>%
+  summarise(any_det = any(det == 1L), .groups = "drop") %>%
+  filter(any_det) %>%
+  group_by(Site, Method) %>%
+  summarise(Years = paste(sort(unique(Year)), collapse = ", "), .groups = "drop") %>%
+  arrange(Site, Method)
+
+# Overall (any method)
+years_with_detection_overall <- df_all %>%
+  group_by(Site, Year) %>%
+  summarise(any_det = any(det == 1L), .groups = "drop") %>%
+  filter(any_det) %>%
+  group_by(Site) %>%
+  summarise(Years = paste(sort(unique(Year)), collapse = ", "), .groups = "drop") %>%
+  mutate(Method = "Any method") %>%
+  select(Site, Method, Years)
+
+# -----------------------------
+# B) Months with any detection (across all years)
+# -----------------------------
+months_with_detection_by_site_method <- df_all %>%
+  group_by(Site, Method, Month, MonthI) %>%
+  summarise(any_det = any(det == 1L), .groups = "drop") %>%
+  filter(any_det) %>%
+  group_by(Site, Method) %>%
+  arrange(MonthI, .by_group = TRUE) %>%
+  summarise(Months = paste(as.character(Month), collapse = ", "), .groups = "drop") %>%
+  arrange(Site, Method)
+
+months_with_detection_overall <- df_all %>%
+  group_by(Site, Month, MonthI) %>%
+  summarise(any_det = any(det == 1L), .groups = "drop") %>%
+  filter(any_det) %>%
+  group_by(Site) %>%
+  arrange(MonthI, .by_group = TRUE) %>%
+  summarise(Months = paste(as.character(Month), collapse = ", "), .groups = "drop") %>%
+  mutate(Method = "Any method") %>%
+  select(Site, Method, Months)
+
+# -----------------------------
+# C) Site × Year × Month table: detection counts & effort
+#     - det_cells = # wetland-month cells with detection (1)
+#     - n_cells   = # surveyed wetland-month cells (effort > 0)
+# -----------------------------
+site_year_month_by_method <- df_all %>%
+  group_by(Site, Method, Year, Month, MonthI) %>%
+  summarise(
+    det_cells = sum(det, na.rm = TRUE),
+    n_cells   = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(Site, Method, Year, MonthI)
+
+site_year_month_overall <- df_all %>%
+  group_by(Site, Year, Month, MonthI) %>%
+  summarise(
+    det_cells = sum(det, na.rm = TRUE),
+    n_cells   = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(Method = "Any method") %>%
+  arrange(Site, Year, MonthI)
+
+# -----------------------------
+# Pretty prints
+# -----------------------------
+cat("\n=== YEARS WITH ANY DETECTION — by Site & Method ===\n")
+print(years_with_detection_by_site_method, n = Inf)
+
+cat("\n=== YEARS WITH ANY DETECTION — Overall (Any method) ===\n")
+print(years_with_detection_overall, n = Inf)
+
+cat("\n=== MONTHS WITH ANY DETECTION (across all years) — by Site & Method ===\n")
+print(months_with_detection_by_site_method, n = Inf)
+
+cat("\n=== MONTHS WITH ANY DETECTION (across all years) — Overall (Any method) ===\n")
+print(months_with_detection_overall, n = Inf)
+
+cat("\n=== SITE × YEAR × MONTH — detection cells & surveyed cells (by method) ===\n")
+print(site_year_month_by_method %>% select(Site, Method, Year, Month, det_cells, n_cells), n = 30)
+
+cat("\n=== SITE × YEAR × MONTH — detection cells & surveyed cells (overall) ===\n")
+print(site_year_month_overall %>% select(Site, Year, Month, det_cells, n_cells), n = 30)
+
+# -----------------------------
+# (Optional) Save CSVs
+# -----------------------------
+# readr::write_csv(years_with_detection_by_site_method,  "years_with_detection_by_site_method.csv")
+# readr::write_csv(years_with_detection_overall,         "years_with_detection_overall.csv")
+# readr::write_csv(months_with_detection_by_site_method, "months_with_detection_by_site_method.csv")
+# readr::write_csv(months_with_detection_overall,        "months_with_detection_overall.csv")
+# readr::write_csv(site_year_month_by_method,            "site_year_month_by_method.csv")
+# readr::write_csv(site_year_month_overall,              "site_year_month_overall.csv")
 
 ```
 
