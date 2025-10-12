@@ -1233,7 +1233,7 @@ p_psi_violin_overall <- ggplot(psi_long_overall, aes(x = WetlandID_f, y = psi)) 
   scale_y_continuous(limits = c(0, 1), expand = expansion(mult = c(0, 0.02)),
                      name = expression("Occupancy Probability"(psi))) +
   labs(x = "Wetland ID",
-       title = "Predicted Occupancy Probability by Wetland (ψ)") +
+       title = "Predicted Occupancy Probability of Gopher Frogs by Wetland (ψ)") +
   theme_classic(base_size = 12) +
   theme(legend.position = "top",
         axis.text.x = element_text(angle = 45, hjust = 1),
@@ -1634,6 +1634,495 @@ print(site_year_month_overall %>% select(Site, Year, Month, det_cells, n_cells),
 # readr::write_csv(months_with_detection_overall,        "months_with_detection_overall.csv")
 # readr::write_csv(site_year_month_by_method,            "site_year_month_by_method.csv")
 # readr::write_csv(site_year_month_overall,              "site_year_month_overall.csv")
+
+```
+
+```{r}
+# ============================================================
+# Occupancy & Detection: tables for thesis / appendix
+# (NO file writes)
+# Requires: fit, y_* / effort_* arrays, site_levels, all_years,
+#           nSites, nWetlands_vec, wet_index
+# ============================================================
+
+library(dplyr)
+library(tidyr)
+library(purrr)
+
+inv_logit <- function(x) 1/(1+exp(-x))
+s <- fit$sims.list
+
+# Helper: proportion of draws whose sign matches the mean's sign
+pr_same_sign <- function(v){
+  m <- mean(v, na.rm = TRUE)
+  if (is.na(m) || m == 0) return(NA_real_)
+  mean(sign(v) == sign(m), na.rm = TRUE)
+}
+
+# ------------------------------------------------------------
+# 1) Naïve occupancy (per site + overall)
+#    (fraction of wetlands with ≥1 detection, any method)
+# ------------------------------------------------------------
+any_det_arr <- (y_dip + y_call + y_egg) > 0  # [site, wet, month, year]
+
+naive_by_site <- lapply(seq_len(nSites), function(j){
+  if (nWetlands_vec[j] == 0) return(tibble())
+  any_wet <- apply(any_det_arr[j, 1:nWetlands_vec[j], , , drop = FALSE], 2, any)
+  tibble(Site = as.character(site_levels[j]),
+         nWetlands = nWetlands_vec[j],
+         nWithDet  = sum(any_wet),
+         naive_occupancy = nWithDet / nWetlands)
+}) |> bind_rows()
+
+naive_overall <- tibble(
+  Site = "Overall",
+  nWetlands = sum(nWetlands_vec),
+  nWithDet  = sum(naive_by_site$nWithDet),
+  naive_occupancy = nWithDet / nWetlands
+)
+
+naive_tbl <- bind_rows(naive_by_site, naive_overall)
+cat("\n=== Naïve occupancy (per site & overall) ===\n")
+print(naive_tbl, n = Inf)
+
+# ------------------------------------------------------------
+# 2) Occupancy probability at the site level (posterior)
+#    Using monitored occ_prop[j,t] (site-year proportion occupied)
+#    and an equal-weight average across years (within draw)
+# ------------------------------------------------------------
+stopifnot(!is.null(s$occ_prop))
+occ <- s$occ_prop  # [iter, site, year]
+
+# (a) Site × Year summaries (means instead of medians)
+occ_by_site_year <- bind_rows(lapply(seq_len(nSites), function(j){
+  bind_rows(lapply(seq_len(dim(occ)[3]), function(t){
+    v  <- occ[, j, t]
+    qs <- quantile(v, c(.025,.975), na.rm=TRUE)
+    tibble(Site = as.character(site_levels[j]),
+           Year = as.character(all_years[t]),
+           mean = mean(v, na.rm = TRUE),
+           lo95 = qs[1], hi95 = qs[2],
+           pr_gt_0.5 = mean(v > 0.5, na.rm=TRUE))
+  }))
+})) %>% arrange(Site, Year)
+
+# (b) Overall by site (equal-weight across years within each draw)
+occ_site_overall_draws <- apply(occ, c(1,2), mean, na.rm = TRUE)  # [iter, site]
+
+calc_stats <- function(v){
+  c(
+    mean       = mean(v, na.rm = TRUE),
+    lo95       = quantile(v, 0.025, na.rm = TRUE),
+    hi95       = quantile(v, 0.975, na.rm = TRUE),
+    pr_gt_0.5  = mean(v > 0.5, na.rm = TRUE)
+  )
+}
+
+# rows = sites, cols = stats (mean, lo95, hi95, pr_gt_0.5)
+occ_site_summ <- t(apply(occ_site_overall_draws, 2, calc_stats))
+occ_site_summ <- as.data.frame(occ_site_summ)
+occ_site_summ[] <- lapply(occ_site_summ, function(x) as.numeric(x))
+
+occ_site_overall_tbl <- dplyr::tibble(Site = as.character(site_levels)) |>
+  dplyr::bind_cols(occ_site_summ)
+
+cat("\n=== Site-level occupancy (overall across years) ===\n")
+print(occ_site_overall_tbl)
+cat("\n=== Site × Year occupancy ===\n")
+print(occ_by_site_year, n = Inf)
+
+# ------------------------------------------------------------
+# 3) Occupancy probability for each wetland (overall)
+#    (numbers that correspond to your violins & maps)
+# ------------------------------------------------------------
+stopifnot(!is.null(s$psi))
+psi_all <- s$psi  # [iter, site, wetland, year]
+
+# average across years within draw -> [iter, site, wetland]
+psi_overall_draws <- apply(psi_all, c(1,2,3), mean, na.rm=TRUE)
+
+wet_key <- wet_index %>% select(Site, WetID, WetlandID)
+psi_wet_tbl <- bind_rows(lapply(seq_len(nSites), function(j){
+  bind_rows(lapply(seq_len(nWetlands_vec[j]), function(w){
+    v <- psi_overall_draws[, j, w]
+    qs <- quantile(v, c(.025,.10,.20,.80,.90,.975), na.rm=TRUE)
+    tibble(Site = as.character(site_levels[j]),
+           WetID = w,
+           WetlandID = wet_key$WetlandID[wet_key$Site==as.character(site_levels[j]) & wet_key$WetID==w][1],
+           mean = mean(v, na.rm = TRUE),
+           lo80 = qs[3], hi80 = qs[4],
+           lo95 = qs[1], hi95 = qs[6],
+           pr_gt_0.5 = mean(v > 0.5, na.rm=TRUE))
+  }))
+})) %>%
+  mutate(WetlandID = as.character(WetlandID),
+         WetlandID_num = suppressWarnings(as.numeric(WetlandID))) %>%
+  arrange(Site, is.na(WetlandID_num), WetlandID_num, WetlandID) %>%
+  select(-WetlandID_num)
+
+cat("\n=== Wetland-level occupancy (overall across years) ===\n")
+print(head(psi_wet_tbl, 20))
+
+# ------------------------------------------------------------
+# 4) Relationships (occupancy): covariates & landscape REs
+#    Report means, 95% CrIs on logit scale + Pr(same sign as mean)
+# ------------------------------------------------------------
+need <- c("alpha_canopy","alpha_hydro","alpha_dist","alpha_ratio")
+stopifnot(all(need %in% names(s)), !is.null(s$land_re))
+
+summ_beta <- function(draws, name){
+  tibble(Parameter = name,
+         mean = mean(draws, na.rm = TRUE),
+         lo95 = quantile(draws, 0.025, na.rm = TRUE),
+         hi95 = quantile(draws, 0.975, na.rm = TRUE),
+         pr_same_sign_as_mean = pr_same_sign(draws))
+}
+
+rel_cov_tbl <- bind_rows(
+  summ_beta(s$alpha_canopy, "Canopy (alpha_canopy)"),
+  summ_beta(s$alpha_hydro,  "Hydroperiod (alpha_hydro)"),
+  summ_beta(s$alpha_dist,   "Nearby ≤500 m (alpha_dist)"),
+  summ_beta(s$alpha_ratio,  "Ratio (alpha_ratio)")
+)
+
+land_mat <- as.matrix(s$land_re)  # [iter, nLand]
+land_labels <- c("Ceylon WMA","Jones Center Ichauway")[seq_len(ncol(land_mat))]
+rel_land_tbl <- bind_rows(lapply(seq_len(ncol(land_mat)), function(i){
+  summ_beta(land_mat[,i], paste0("Landscape RE: ", land_labels[i]))
+}))
+
+rel_all_tbl <- bind_rows(rel_cov_tbl, rel_land_tbl)
+cat("\n=== Occupancy relationships: covariates & landscape REs (logit scale) ===\n")
+print(rel_all_tbl, n = Inf)
+
+# ------------------------------------------------------------
+# 5) Detection probability — overall (model-based; no site split)
+# ------------------------------------------------------------
+avg_over_month_year <- function(b0, bmon, byear){
+  M  <- ncol(as.data.frame(bmon))
+  TT <- ncol(as.data.frame(byear))
+  rowMeans(do.call(cbind, lapply(seq_len(M), function(m)
+    sapply(seq_len(TT), function(t) inv_logit(b0 + bmon[,m] + byear[,t])))), na.rm = TRUE)
+}
+
+p_call <- avg_over_month_year(s$beta0_call, s$beta_mon_call, s$beta_yr_call)
+p_dip  <- avg_over_month_year(s$beta0_dip,  s$beta_mon_dip,  s$beta_yr_dip)
+p_egg  <- if (!is.null(s$beta0_egg)) avg_over_month_year(s$beta0_egg, s$beta_mon_egg, s$beta_yr_egg) else NULL
+
+summ_p <- function(v, name){
+  qs <- quantile(v, c(.025,.975), na.rm=TRUE)
+  tibble(Method = name, p_mean = mean(v, na.rm = TRUE),
+         p_lo95 = qs[1], p_hi95 = qs[2])
+}
+
+det_overall_tbl <- bind_rows(
+  summ_p(p_call, "Call files"),
+  summ_p(p_dip,  "Dipnet surveys"),
+  if (!is.null(p_egg)) summ_p(p_egg, "Egg mass surveys")
+)
+cat("\n=== Overall detection probability (model-based) ===\n")
+print(det_overall_tbl)
+
+# ------------------------------------------------------------
+# 6) Detection relationships: Month & Year
+#    (a) Effects on logit scale with Pr(same sign as mean)
+#    (b) Marginal probabilities by month/year with 95% CrIs
+# ------------------------------------------------------------
+labs_for_months <- function(M) month.name[seq_len(ncol(as.data.frame(M)))]
+labs_for_years  <- function(M) as.character(all_years)[seq_len(ncol(as.data.frame(M)))]
+
+summ_effects_logit <- function(M, effect_name, labels_vec){
+  L <- ncol(as.data.frame(M))
+  bind_rows(lapply(seq_len(L), function(i){
+    v  <- M[, i]
+    tibble(Effect = effect_name, Level = labels_vec[i],
+           mean = mean(v, na.rm = TRUE),
+           lo95 = quantile(v, 0.025, na.rm = TRUE),
+           hi95 = quantile(v, 0.975, na.rm = TRUE),
+           pr_same_sign_as_mean = pr_same_sign(v))
+  }))
+}
+
+# (a) logit-scale effects + Pr(same sign as mean)
+month_fx_tbl <- bind_rows(
+  summ_effects_logit(s$beta_mon_call, "Month (Call files)", labs_for_months(s$beta_mon_call)),
+  summ_effects_logit(s$beta_mon_dip,  "Month (Dipnet)"    , labs_for_months(s$beta_mon_dip)),
+  if (!is.null(s$beta_mon_egg))
+    summ_effects_logit(s$beta_mon_egg, "Month (Egg)"      , labs_for_months(s$beta_mon_egg))
+)
+year_fx_tbl <- bind_rows(
+  summ_effects_logit(s$beta_yr_call, "Year (Call files)", labs_for_years(s$beta_yr_call)),
+  summ_effects_logit(s$beta_yr_dip,  "Year (Dipnet)"    , labs_for_years(s$beta_yr_dip)),
+  if (!is.null(s$beta_yr_egg))
+    summ_effects_logit(s$beta_yr_egg, "Year (Egg)"      , labs_for_years(s$beta_yr_egg))
+)
+
+cat("\n=== Detection effects — logit scale (Month & Year) ===\n")
+print(head(month_fx_tbl, 12)); print(head(year_fx_tbl, 12))
+
+# (b) Marginal probabilities (hold the other factor at draw-wise mean) — report means
+marginal_month <- function(b0, bmon, byear, method_label, labels_vec){
+  By <- rowMeans(byear, na.rm=TRUE)
+  L  <- ncol(as.data.frame(bmon))
+  bind_rows(lapply(seq_len(L), function(m){
+    p  <- inv_logit(b0 + bmon[,m] + By)
+    qs <- quantile(p, c(.025,.975), na.rm=TRUE)
+    tibble(Method = method_label, Month = labels_vec[m],
+           p_mean = mean(p, na.rm = TRUE),
+           p_lo95 = qs[1], p_hi95 = qs[2])
+  }))
+}
+marginal_year <- function(b0, bmon, byear, method_label, labels_vec){
+  Bm <- rowMeans(bmon, na.rm=TRUE)
+  L  <- ncol(as.data.frame(byear))
+  bind_rows(lapply(seq_len(L), function(ti){
+    p  <- inv_logit(b0 + Bm + byear[,ti])
+    qs <- quantile(p, c(.025,.975), na.rm=TRUE)
+    tibble(Method = method_label, Year = labels_vec[ti],
+           p_mean = mean(p, na.rm = TRUE),
+           p_lo95 = qs[1], p_hi95 = qs[2])
+  }))
+}
+
+pm_tbl <- bind_rows(
+  marginal_month(s$beta0_call, s$beta_mon_call, s$beta_yr_call, "Call files",  labs_for_months(s$beta_mon_call)),
+  marginal_month(s$beta0_dip,  s$beta_mon_dip,  s$beta_yr_dip,  "Dipnet surveys", labs_for_months(s$beta_mon_dip)),
+  if (!is.null(s$beta0_egg))
+    marginal_month(s$beta0_egg, s$beta_mon_egg, s$beta_yr_egg, "Egg mass surveys", labs_for_months(s$beta_mon_egg))
+)
+py_tbl <- bind_rows(
+  marginal_year(s$beta0_call, s$beta_mon_call, s$beta_yr_call, "Call files",  labs_for_years(s$beta_yr_call)),
+  marginal_year(s$beta0_dip,  s$beta_mon_dip,  s$beta_yr_dip,  "Dipnet surveys", labs_for_years(s$beta_yr_dip)),
+  if (!is.null(s$beta0_egg))
+    marginal_year(s$beta0_egg, s$beta_mon_egg, s$beta_yr_egg, "Egg mass surveys", labs_for_years(s$beta_yr_egg))
+)
+
+cat("\n=== Detection — marginal probabilities by Month (overall) ===\n")
+print(head(pm_tbl, 12))
+cat("\n=== Detection — marginal probabilities by Year (overall) ===\n")
+print(py_tbl, n = Inf)
+
+# ---------------- Done ----------------
+
+
+```
+
+```{r}
+# ---- Detection summary table (mean, 95% CI, Bayesian p-value = Pr(same sign as mean)) ----
+library(dplyr)
+library(tidyr)
+library(stringr)
+
+stopifnot(exists("fit"), !is.null(fit$sims.list))
+s <- fit$sims.list
+
+# Helper already defined earlier; re-define here if not in scope
+if (!exists("pr_same_sign")) {
+  pr_same_sign <- function(v){
+    m <- mean(v, na.rm = TRUE)
+    if (is.na(m) || m == 0) return(NA_real_)
+    mean(sign(v) == sign(m), na.rm = TRUE)
+  }
+}
+
+# Build a tidy table for one method's detection parameters
+one_method_detection_tbl <- function(method){
+  # method is one of "call", "dip", "egg"
+  b0   <- s[[paste0("beta0_", method)]]
+  bmon <- s[[paste0("beta_mon_", method)]]
+  byear<- s[[paste0("beta_yr_",  method)]]
+
+  out <- list()
+
+  # Intercept
+  if (!is.null(b0)) {
+    out$intercept <- tibble(
+      VARIABLE   = "β₀",
+      DEFINITION = paste0(toupper(substr(method,1,1)), substr(method,2,999),
+                          " detection intercept"),
+      MEAN       = mean(b0, na.rm = TRUE),
+      `95% CI (lo)` = quantile(b0, 0.025, na.rm = TRUE),
+      `95% CI (hi)` = quantile(b0, 0.975, na.rm = TRUE),
+      `BAYESIAN P-VALUE` = pr_same_sign(b0)
+    )
+  }
+
+  # Month effects (if present)
+  if (!is.null(bmon)) {
+    Lm <- ncol(as.data.frame(bmon))
+    mon_labs <- month.name[seq_len(Lm)]
+    mon_tbl <- bind_rows(lapply(seq_len(Lm), function(i){
+      v <- bmon[, i]
+      tibble(
+        VARIABLE   = paste0("β_mon[", i, "]"),
+        DEFINITION = paste0("Month effect: ", mon_labs[i], " (", 
+                            toupper(substr(method,1,1)), substr(method,2,999), ")"),
+        MEAN       = mean(v, na.rm = TRUE),
+        `95% CI (lo)` = quantile(v, 0.025, na.rm = TRUE),
+        `95% CI (hi)` = quantile(v, 0.975, na.rm = TRUE),
+        `BAYESIAN P-VALUE` = pr_same_sign(v)
+      )
+    }))
+    out$month <- mon_tbl
+  }
+
+  # Year effects (if present)
+  if (!is.null(byear)) {
+    Ly <- ncol(as.data.frame(byear))
+    yr_labs <- if (exists("all_years")) as.character(all_years)[seq_len(Ly)] else paste0("Year_", seq_len(Ly))
+    yr_tbl <- bind_rows(lapply(seq_len(Ly), function(i){
+      v <- byear[, i]
+      tibble(
+        VARIABLE   = paste0("β_year[", i, "]"),
+        DEFINITION = paste0("Year effect: ", yr_labs[i], " (", 
+                            toupper(substr(method,1,1)), substr(method,2,999), ")"),
+        MEAN       = mean(v, na.rm = TRUE),
+        `95% CI (lo)` = quantile(v, 0.025, na.rm = TRUE),
+        `95% CI (hi)` = quantile(v, 0.975, na.rm = TRUE),
+        `BAYESIAN P-VALUE` = pr_same_sign(v)
+      )
+    }))
+    out$year <- yr_tbl
+  }
+
+  bind_rows(out)
+}
+
+det_tables <- list()
+
+if (!is.null(s$beta0_call) || !is.null(s$beta_mon_call) || !is.null(s$beta_yr_call)) {
+  det_tables$Call <- one_method_detection_tbl("call") %>% mutate(METHOD = "Call files", .before = 1)
+}
+if (!is.null(s$beta0_dip)  || !is.null(s$beta_mon_dip)  || !is.null(s$beta_yr_dip)) {
+  det_tables$Dip  <- one_method_detection_tbl("dip")  %>% mutate(METHOD = "Dipnet surveys", .before = 1)
+}
+if (!is.null(s$beta0_egg)  || !is.null(s$beta_mon_egg)  || !is.null(s$beta_yr_egg)) {
+  det_tables$Egg  <- one_method_detection_tbl("egg")  %>% mutate(METHOD = "Egg mass surveys", .before = 1)
+}
+
+# Final table (stacked)
+det_summary_tbl <- bind_rows(det_tables) %>%
+  # nice ordering: Method, Intercept, Months, Years
+  mutate(.ord = dplyr::case_when(
+    grepl("^β₀$", VARIABLE) ~ 1,
+    grepl("^β_mon\\[", VARIABLE) ~ 2,
+    grepl("^β_year\\[", VARIABLE) ~ 3,
+    TRUE ~ 4
+  )) %>%
+  arrange(METHOD, .ord, VARIABLE) %>%
+  select(-.ord)
+
+# Print and optionally write CSV
+cat("\n=== Detection model parameter summary (means, 95% CrI, Pr[same sign as mean]) ===\n")
+print(det_summary_tbl, n = 30)
+
+readr::write_csv(det_summary_tbl, "detection_parameter_summary.csv")
+
+```
+
+```{r}
+# ---- Compact detection table: Intercept, pooled Month, pooled Year (per method) ----
+library(dplyr)
+library(tidyr)
+
+s <- fit$sims.list
+
+# If not already defined
+if (!exists("pr_same_sign")) {
+  pr_same_sign <- function(v){
+    m <- mean(v, na.rm = TRUE)
+    if (is.na(m) || m == 0) return(NA_real_)
+    mean(sign(v) == sign(m), na.rm = TRUE)
+  }
+}
+
+summ_from_draws <- function(v, label){
+  tibble(
+    VARIABLE              = label,
+    MEAN                  = mean(v, na.rm = TRUE),
+    `95% CI (lo)`         = quantile(v, 0.025, na.rm = TRUE),
+    `95% CI (hi)`         = quantile(v, 0.975, na.rm = TRUE),
+    `BAYESIAN P-VALUE`    = pr_same_sign(v)
+  )
+}
+
+one_method_compact <- function(method, method_label){
+  b0    <- s[[paste0("beta0_", method)]]
+  bmon  <- s[[paste0("beta_mon_", method)]]
+  byear <- s[[paste0("beta_yr_",  method)]]
+
+  out <- list()
+
+  # Intercept
+  if (!is.null(b0)) {
+    out$intercept <- summ_from_draws(b0, "β₀ (intercept)")
+  }
+
+  # Pooled Month effect: row-mean across months within each draw
+  if (!is.null(bmon)) {
+    bm <- as.data.frame(bmon)         # [iter x nMonth]
+    pooled_month <- rowMeans(bm, na.rm = TRUE)
+    out$month <- summ_from_draws(pooled_month, "β_month (pooled)")
+  }
+
+  # Pooled Year effect: row-mean across years within each draw
+  if (!is.null(byear)) {
+    by <- as.data.frame(byear)        # [iter x nYear]
+    pooled_year <- rowMeans(by, na.rm = TRUE)
+    out$year <- summ_from_draws(pooled_year, "β_year (pooled)")
+  }
+
+  bind_rows(out) %>% mutate(METHOD = method_label, .before = 1)
+}
+
+det_compact_tbl <- bind_rows(
+  if (!is.null(s$beta0_call) || !is.null(s$beta_mon_call) || !is.null(s$beta_yr_call))
+    one_method_compact("call", "Call files"),
+  if (!is.null(s$beta0_dip)  || !is.null(s$beta_mon_dip)  || !is.null(s$beta_yr_dip))
+    one_method_compact("dip",  "Dipnet surveys"),
+  if (!is.null(s$beta0_egg)  || !is.null(s$beta_mon_egg)  || !is.null(s$beta_yr_egg))
+    one_method_compact("egg",  "Egg mass surveys")
+) %>%
+  arrange(METHOD, factor(VARIABLE, levels = c("β₀ (intercept)","β_month (pooled)","β_year (pooled)")))
+
+cat("\n=== Detection model (compact): intercept, pooled Month, pooled Year ===\n")
+print(det_compact_tbl, n = Inf)
+
+# Optionally write to CSV
+# readr::write_csv(det_compact_tbl, "detection_parameter_summary_compact.csv")
+
+```
+```{r}
+# --- Overall detection estimate (posterior, model-based) ---
+inv_logit <- function(x) 1/(1+exp(-x))
+s <- fit$sims.list
+
+overall_det <- function(method = c("call", "dip", "egg")) {
+  method <- match.arg(method)
+  b0   <- s[[paste0("beta0_", method)]]
+  bmon <- s[[paste0("beta_mon_", method)]]
+  by   <- s[[paste0("beta_yr_",  method)]]
+  stopifnot(!is.null(b0), !is.null(bmon), !is.null(by))
+
+  M  <- ncol(as.data.frame(bmon))
+  Tt <- ncol(as.data.frame(by))
+
+  p_draws <- rowMeans(do.call(cbind, lapply(seq_len(M), function(m)
+    sapply(seq_len(Tt), function(t) inv_logit(b0 + bmon[, m] + by[, t]))
+  )), na.rm = TRUE)
+
+  tibble(
+    method = method,
+    p_mean = mean(p_draws),
+    p_lo95 = quantile(p_draws, 0.025),
+    p_hi95 = quantile(p_draws, 0.975)
+  )
+}
+
+# Example for all three methods:
+overall_det("call")
+overall_det("dip")
+overall_det("egg")  # only if egg survey params exist
 
 ```
 
