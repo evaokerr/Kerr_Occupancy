@@ -397,9 +397,7 @@ stopifnot(all(y_dip  <= effort_dip),
 
 
 ```{r}
-# Landscape index (1=Ceylon, 2=Jones) for random effect
-landscape <- c(1, 2)  # length = nSites
-nLand <- 2
+site_jones <- c(0L, 1L) 
 
 # Replace remaining NAs in covariates with 0 (post-scaling)
 cov_na_to0 <- function(M) { M[is.na(M)] <- 0; M }
@@ -410,12 +408,11 @@ nNearby_sc <- cov_na_to0(nNearby_sc)
 
 data_list <- list(
   nSites = nSites,
-  nLand  = nLand,
   nMonths = nMonths,
   nYear  = nYear,
   nWetlands = nWetlands_vec,
   maxWetlands = maxWetlands,
-  landscape = landscape,
+  site_jones = site_jones,
   canopy = canopy_sc,
   hydro  = hydro_sc,
   dist   = nNearby_sc,
@@ -442,30 +439,33 @@ model{
   alpha_hydro   ~ dnorm(0, 0.5)
   alpha_dist    ~ dnorm(0, 0.5)
   alpha_ratio   ~ dnorm(0, 0.5)
+  alpha_land ~ dnorm(0, 0.5)
 
-  tau_land ~ dgamma(0.1, 0.1)
-  for(l in 1:nLand){
-    land_re[l] ~ dnorm(0, tau_land)
-  }
+
 
   beta0_dip  ~ dnorm(0, 0.5)
   beta0_call ~ dnorm(0, 0.5)
   beta0_egg  ~ dnorm(0, 0.5)   # NEW
 
-  pr_dip  ~ dexp(1)
-  pr_call ~ dexp(1)
-  pr_egg  ~ dexp(1)            # NEW
+  # Month random-effect precisions (year will be fixed/non-pooled)
+  pr_mon_dip  ~ dexp(1)
+  pr_mon_call ~ dexp(1)
+  pr_mon_egg  ~ dexp(1)
+
 
   for(m in 1:nMonths){
-    beta_mon_dip[m]  ~ dnorm(0, pr_dip)
-    beta_mon_call[m] ~ dnorm(0, pr_call)
-    beta_mon_egg[m]  ~ dnorm(0, pr_egg)  # NEW
+    beta_mon_dip[m]  ~ dnorm(0, pr_mon_dip)
+    beta_mon_call[m] ~ dnorm(0, pr_mon_call)
+    beta_mon_egg[m]  ~ dnorm(0, pr_mon_egg)
   }
+
+
   for(t in 1:nYear){
-    beta_yr_dip[t]   ~ dnorm(0, pr_dip)
-    beta_yr_call[t]  ~ dnorm(0, pr_call)
-    beta_yr_egg[t]   ~ dnorm(0, pr_egg)  # NEW
+    beta_yr_dip[t]   ~ dnorm(0, 0.5)
+    beta_yr_call[t]  ~ dnorm(0, 0.5)
+    beta_yr_egg[t]   ~ dnorm(0, 0.5)
   }
+
 
   # Ecological & observation processes (single species)
   for(j in 1:nSites){
@@ -473,7 +473,7 @@ model{
       for(t in 1:nYear){
 
 logit(psi[j,w,t]) <- alpha0
-                    + land_re[landscape[j]]
+                    + alpha_land * site_jones[j]
                     + alpha_canopy * canopy[j,w]
                     + alpha_hydro  * hydro[j,w]
                     + alpha_dist   * dist[j,w]
@@ -526,13 +526,14 @@ inits_fun <- function(){
     alpha_hydro  = 0,
     alpha_dist   = 0,
     alpha_ratio  = 0,
+    alpha_land = 0,
     beta0_dip = 0, beta0_call = 0, beta0_egg = 0  # NEW
   )
 }
 
 params <- c(
   "alpha0","alpha_canopy","alpha_hydro","alpha_dist","alpha_ratio",
-  "land_re",
+  "alpha_land",
   "beta0_dip","beta0_call","beta0_egg",                 # NEW
   "beta_mon_dip","beta_mon_call","beta_mon_egg",        # NEW
   "beta_yr_dip","beta_yr_call","beta_yr_egg",           # NEW
@@ -711,13 +712,14 @@ post_overall <- dplyr::bind_rows(
   data.frame(Estimate = s$alpha_canopy,  ParamGroup = "Canopy"),
   data.frame(Estimate = s$alpha_hydro,   ParamGroup = "Hydroperiod"),
   data.frame(Estimate = s$alpha_dist,    ParamGroup = "Nearby (≤500 m)"),
-  data.frame(Estimate = s$alpha_ratio,   ParamGroup = "Ratio")
+  data.frame(Estimate = s$alpha_ratio,   ParamGroup = "Ratio"),
+  data.frame(Estimate = s$alpha_land,    ParamGroup = "Landscape")
 )
 
 # order top → bottom the way you want
 post_overall$ParamGroup <- factor(
   post_overall$ParamGroup,
-  levels = c("Canopy","Hydroperiod","Nearby (≤500 m)","Ratio")
+  levels = c("Canopy","Hydroperiod","Nearby (≤500 m)","Ratio", "Landscape")
 )
 
 # settings
@@ -759,70 +761,6 @@ ggsave("ridge_overall_stacked.png", p_stacked, width = 9, height = 5.5, dpi = 30
 
 
 ```{r}
-library(dplyr)
-library(ggplot2)
-library(ggridges)
-
-s <- fit$sims.list
-stopifnot(!is.null(s$land_re))
-
-# --- make land_re robustly a matrix ---
-land_re <- as.matrix(s$land_re)   # <-- key change
-landscape_labels <- c("Ceylon WMA", "Jones Center Ichauway")
-n_land  <- ncol(land_re)
-
-# Pieces per landscape (NO ratio)
-post_byland_list <- c(
-  lapply(seq_len(n_land), function(l)
-    data.frame(Estimate = s$alpha_canopy,  ParamGroup = "Canopy",          Level = landscape_labels[l])),
-  lapply(seq_len(n_land), function(l)
-    data.frame(Estimate = s$alpha_hydro,   ParamGroup = "Hydroperiod",      Level = landscape_labels[l])),
-  lapply(seq_len(n_land), function(l)
-    data.frame(Estimate = s$alpha_dist,    ParamGroup = "Nearby (≤500 m)",  Level = landscape_labels[l]))
-)
-
-post_byland <- dplyr::bind_rows(post_byland_list)
-
-# Landscape random effects
-post_land <- data.frame(
-  Estimate   = as.numeric(c(s$land_re[, 1:n_land])),
-  ParamGroup = "Landscape",
-  Level      = rep(landscape_labels[seq_len(n_land)], each = nrow(s$land_re))
-)
-
-post_split_grid <- dplyr::bind_rows(post_byland, post_land)
-
-# Ordering
-post_split_grid$Level <- factor(post_split_grid$Level, levels = landscape_labels)
-post_split_grid$ParamGroup <- factor(
-  post_split_grid$ParamGroup,
-  levels = c("Canopy", "Hydroperiod", "Nearby (≤500 m)", "Landscape")
-)
-
-# --- robust x limits to avoid axis blow-up from a few extreme draws ---
-xr <- quantile(post_split_grid$Estimate, c(0.005, 0.995), na.rm = TRUE)
-
-
-ggplot(post_split_grid, aes(x = Estimate, y = Level, fill = after_stat(x))) +
-    geom_vline(xintercept = c(-4, -2, 2, 4), colour = "grey80", linewidth = 0.1) +
-
-  
-  # horizontal guides (one at each ridge baseline)
-  geom_hline(yintercept = seq_along(levels(post_overall$ParamGroup)),
-             colour = "grey80", linewidth = 0.1) +
-  geom_density_ridges_gradient(scale = 1.6, rel_min_height = 0.01, size = 0.3) +
-  scale_fill_viridis_c(name = "Estimate", option = "C",
-                       limits = xr, oob = scales::squish) +
-  facet_wrap(~ ParamGroup, ncol = 2) +  # fixed scales across facets
-  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.8, colour = "grey20") +
-  coord_cartesian(xlim = xr) +
-  labs(x = "Estimate (logit)", y = NULL, title = "Posterior Distributions of Covariate Effects on Occupancy by Landscape") +
-  theme_minimal(base_size = 13) +
-  theme(panel.grid = element_blank(),
-        strip.text = element_text(face = "bold"))
-
-
-ggsave("ridge_by_landscape_no_ratio.jpeg", width = 10, height = 8, dpi = 300)
 
 
 ```
@@ -1767,8 +1705,8 @@ print(head(psi_wet_tbl, 20))
 # 4) Relationships (occupancy): covariates & landscape REs
 #    Report means, 95% CrIs on logit scale + Pr(same sign as mean)
 # ------------------------------------------------------------
-need <- c("alpha_canopy","alpha_hydro","alpha_dist","alpha_ratio")
-stopifnot(all(need %in% names(s)), !is.null(s$land_re))
+need <- c("alpha_canopy","alpha_hydro","alpha_dist","alpha_ratio","alpha_land")
+stopifnot(all(need %in% names(s)))
 
 summ_beta <- function(draws, name){
   tibble(Parameter = name,
@@ -1778,22 +1716,17 @@ summ_beta <- function(draws, name){
          pr_same_sign_as_mean = pr_same_sign(draws))
 }
 
-rel_cov_tbl <- bind_rows(
+rel_all_tbl <- bind_rows(
   summ_beta(s$alpha_canopy, "Canopy (alpha_canopy)"),
   summ_beta(s$alpha_hydro,  "Hydroperiod (alpha_hydro)"),
   summ_beta(s$alpha_dist,   "Nearby ≤500 m (alpha_dist)"),
-  summ_beta(s$alpha_ratio,  "Ratio (alpha_ratio)")
+  summ_beta(s$alpha_ratio,  "Ratio (alpha_ratio)"),
+  summ_beta(s$alpha_land,   "Landscape (Jones vs Ceylon, alpha_land)")  # NEW
 )
 
-land_mat <- as.matrix(s$land_re)  # [iter, nLand]
-land_labels <- c("Ceylon WMA","Jones Center Ichauway")[seq_len(ncol(land_mat))]
-rel_land_tbl <- bind_rows(lapply(seq_len(ncol(land_mat)), function(i){
-  summ_beta(land_mat[,i], paste0("Landscape RE: ", land_labels[i]))
-}))
-
-rel_all_tbl <- bind_rows(rel_cov_tbl, rel_land_tbl)
-cat("\n=== Occupancy relationships: covariates & landscape REs (logit scale) ===\n")
+cat("\n=== Occupancy relationships: fixed effects (logit scale) ===\n")
 print(rel_all_tbl, n = Inf)
+
 
 # ------------------------------------------------------------
 # 5) Detection probability — overall (model-based; no site split)
