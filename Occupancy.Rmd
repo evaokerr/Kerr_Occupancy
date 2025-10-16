@@ -405,6 +405,12 @@ canopy_sc  <- cov_na_to0(canopy_sc)
 hydro_sc   <- cov_na_to0(hydro_sc)
 nNearby_sc <- cov_na_to0(nNearby_sc)
 
+year_num <- as.numeric(all_years)        # e.g., c(2022, 2023, 2024)
+year_c   <- year_num - mean(year_num)    # centered (no scaling)
+# or: year_c <- as.numeric(scale(year_num, center = TRUE, scale = FALSE))
+
+
+
 
 data_list <- list(
   nSites = nSites,
@@ -423,7 +429,8 @@ data_list <- list(
   y_egg  = y_egg,
   effort_dip  = effort_dip,
   effort_call = effort_call,
-  effort_egg  = effort_egg
+  effort_egg  = effort_egg,
+  year = year_c
 )
 
 
@@ -460,11 +467,10 @@ model{
   }
 
 
-  for(t in 1:nYear){
-    beta_yr_dip[t]   ~ dnorm(0, 0.5)
-    beta_yr_call[t]  ~ dnorm(0, 0.5)
-    beta_yr_egg[t]   ~ dnorm(0, 0.5)
-  }
+beta_yr_dip  ~ dnorm(0, 0.5)
+beta_yr_call ~ dnorm(0, 0.5)
+beta_yr_egg  ~ dnorm(0, 0.5)
+
 
 
   # Ecological & observation processes (single species)
@@ -482,9 +488,9 @@ logit(psi[j,w,t]) <- alpha0
         z[j,w,t] ~ dbern(psi[j,w,t])
 
         for(m in 1:nMonths){
-          logit(p_dip[j,w,m,t])  <- beta0_dip  + beta_mon_dip[m]  + beta_yr_dip[t]
-          logit(p_call[j,w,m,t]) <- beta0_call + beta_mon_call[m] + beta_yr_call[t]
-          logit(p_egg[j,w,m,t])  <- beta0_egg  + beta_mon_egg[m]  + beta_yr_egg[t]  # NEW
+          logit(p_dip[j,w,m,t])  <- beta0_dip  + beta_mon_dip[m]  + beta_yr_dip * year[t]
+          logit(p_call[j,w,m,t]) <- beta0_call + beta_mon_call[m] + beta_yr_call * year[t]
+          logit(p_egg[j,w,m,t])  <- beta0_egg  + beta_mon_egg[m]  + beta_yr_egg * year[t]  # NEW
 
           y_dip[j,w,m,t]  ~ dbern(z[j,w,t] * p_dip[j,w,m,t]  * effort_dip[j,w,m,t])
           y_call[j,w,m,t] ~ dbern(z[j,w,t] * p_call[j,w,m,t] * effort_call[j,w,m,t])
@@ -904,48 +910,53 @@ library(ggplot2)
 library(ggridges)
 library(scales)
 
+
 s <- fit$sims.list
-stopifnot(!is.null(s$beta_yr_call), !is.null(s$beta_yr_dip))
 
-post_year <- bind_rows(
-  data.frame(Estimate = as.vector(s$beta_yr_call), Method = "Call"),
-  data.frame(Estimate = as.vector(s$beta_yr_dip),  Method = "Dip")
-)
-if (!is.null(s$beta_yr_egg)) {
-  post_year <- bind_rows(post_year,
-    data.frame(Estimate = as.vector(s$beta_yr_egg), Method = "Egg"))
-}
+# Gather the year-slope posteriors (skip any that don't exist)
+post_year <- dplyr::bind_rows(
+  data.frame(Estimate = as.vector(s$beta_yr_call), ParamGroup = "Year (Call files)"),
+  data.frame(Estimate = as.vector(s$beta_yr_dip ), ParamGroup = "Year (Dipnet surveys)"),
+  if (!is.null(s$beta_yr_egg))
+    data.frame(Estimate = as.vector(s$beta_yr_egg), ParamGroup = "Year (Egg mass surveys)")
+) %>%
+  dplyr::filter(is.finite(Estimate))
 
-# factor order, then relabel strips
-lvl <- c("Call","Dip","Egg"); post_year$Method <- factor(post_year$Method, levels = lvl[lvl %in% unique(post_year$Method)])
-post_year$Method <- dplyr::recode(post_year$Method,
-                                  "Call"="Call Files","Dip"="Dipnet Surveys","Egg"="Egg Mass Surveys")
+# Order top → bottom the way you want
+lvl <- c("Year (Call files)", "Year (Dipnet surveys)", "Year (Egg mass surveys)")
+post_year$ParamGroup <- factor(post_year$ParamGroup, levels = lvl[lvl %in% unique(post_year$ParamGroup)])
 
-# symmetric limits & nice breaks
+# Symmetric x-limits around 0 like your covariate figure
 xr <- range(post_year$Estimate, na.rm = TRUE)
-lim <- max(5, ceiling(max(abs(xr))))
+lim <- max(2, ceiling(max(abs(xr))))
 x_lims   <- c(-lim, lim)
-x_breaks <- pretty(c(-20, 20), n = 5)
-y_lines  <- seq_along(levels(post_year$Method))
+x_breaks <- seq(-lim, lim, by = max(1, round(lim/2)))
 
-p_year_stacked <- ggplot(post_year, aes(x = Estimate, y = Method, fill = after_stat(x))) +
-  # background guides
+p_year <- ggplot(post_year, aes(x = Estimate, y = ParamGroup, fill = after_stat(x))) +
+  # vertical guides (background) — mimic your style
   geom_vline(xintercept = x_breaks, colour = "grey80", linewidth = 0.1) +
- 
-  geom_hline(yintercept = y_lines, colour = "grey85", linewidth = 0.1) +
+  # horizontal guides (one at each ridge baseline)
+  geom_hline(yintercept = seq_along(levels(post_year$ParamGroup)),
+             colour = "grey80", linewidth = 0.1) +
   # ridges
   geom_density_ridges_gradient(scale = 1.3, rel_min_height = 0.01, size = 0.35) +
-   geom_vline(xintercept = 0, linetype = "dashed", colour = "grey20", linewidth = 0.8) +
-  # axes/palette
-  scale_x_continuous("Estimate (logit)", limits = c(-20, 20), breaks = x_breaks,
-                     expand = expansion(add = c(0.7, 0.7))) +
-  scale_fill_viridis_c(name = "Estimate", limits = x_lims, oob = scales::squish) +
-  labs(y = NULL, title = "Posterior Distributions of Year Effects on Detection") +
+  # zero line
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey20", linewidth = 0.8) +
+  # axis + palette
+  scale_x_continuous(
+    name   = "Estimate (logit per centered year)",
+    breaks = x_breaks,
+    limits = x_lims,
+    expand = expansion(add = c(0.7, 0.7))
+  ) +
+  scale_fill_viridis_c(name = "Estimate", option = "C",
+                       limits = x_lims, oob = scales::squish) +
+  labs(y = NULL, title = "Posterior Distributions of Year Slopes on Detection (β_year)") +
   theme_minimal(base_size = 13) +
   theme(panel.grid = element_blank())
 
-p_year_stacked
-ggsave("ridge_year_effect_stacked.jpeg", p_year_stacked, width = 9, height = 5.5, dpi = 300)
+p_year
+ggsave("ridge_year_slopes_stacked.png", p_year, width = 9, height = 4.5, dpi = 300)
 
 
 ```
@@ -953,71 +964,46 @@ ggsave("ridge_year_effect_stacked.jpeg", p_year_stacked, width = 9, height = 5.5
 
 ```{r}
 library(dplyr)
-library(tidyr)
 library(ggplot2)
 library(ggridges)
-library(scales)
 
 s <- fit$sims.list
-stopifnot(!is.null(s$beta_yr_call), !is.null(s$beta_yr_dip))
+stopifnot(exists("year_c"))  # numeric, centered years, same order as all_years
+year_labels <- as.character(all_years)
 
-# year labels
-n_yr <- ncol(as.data.frame(s$beta_yr_call))
-year_labs <- if (exists("all_years")) as.character(all_years) else paste0("Year_", seq_len(n_yr))
-
-# long: METHOD × YEAR
-df_call_y <- as.data.frame(s$beta_yr_call); names(df_call_y) <- year_labs
-df_dip_y  <- as.data.frame(s$beta_yr_dip ); names(df_dip_y)  <- year_labs
-
-post_year_split <- bind_rows(
-  df_call_y |> pivot_longer(everything(), names_to = "Year", values_to = "Estimate") |> mutate(Method = "Call"),
-  df_dip_y  |> pivot_longer(everything(), names_to = "Year", values_to = "Estimate") |> mutate(Method = "Dip")
-)
-if (!is.null(s$beta_yr_egg)) {
-  df_egg_y <- as.data.frame(s$beta_yr_egg); names(df_egg_y) <- year_labs
-  post_year_split <- bind_rows(
-    post_year_split,
-    df_egg_y |> pivot_longer(everything(), names_to = "Year", values_to = "Estimate") |> mutate(Method = "Egg")
-  )
+# Helper: get posteriors for β_year * each year_c[t] for one method
+expand_year_post <- function(beta_draws, year_vec, year_labels, method_label){
+  out <- lapply(seq_along(year_vec), function(t){
+    data.frame(
+      Estimate = beta_draws * year_vec[t],
+      Year = year_labels[t],
+      Method = method_label
+    )
+  })
+  dplyr::bind_rows(out)
 }
 
-# order + relabel methods
-lvl <- c("Call","Dip","Egg")
-post_year_split$Method <- factor(post_year_split$Method, levels = lvl[lvl %in% unique(post_year_split$Method)])
-post_year_split$Method <- dplyr::recode(post_year_split$Method,
-                                        "Call"="Call Files","Dip"="Dipnet Surveys","Egg"="Egg Mass Surveys")
-post_year_split$Year <- factor(post_year_split$Year, levels = year_labs)
+# Build long data for all methods
+post_year_long <- bind_rows(
+  expand_year_post(s$beta_yr_call, year_c, year_labels, "Call Files"),
+  expand_year_post(s$beta_yr_dip,  year_c, year_labels, "Dipnet Surveys"),
+  if (!is.null(s$beta_yr_egg))
+    expand_year_post(s$beta_yr_egg, year_c, year_labels, "Egg Mass Surveys")
+)
 
-# symmetric limits & guides
-xr <- range(post_year_split$Estimate, na.rm = TRUE)
-lim <- max(5, ceiling(max(abs(xr))))
-x_lims   <- c(-lim, lim)
-x_breaks <- pretty(c(-20, 20), n = 5)
-y_lines  <- seq_along(levels(post_year_split$Year))
-
-p_year_cols <- ggplot(post_year_split, aes(x = Estimate, y = Year, fill = after_stat(x))) +
-  # background guides
-  geom_vline(xintercept = x_breaks, colour = "grey80", linewidth = 0.1) +
-  
-  geom_hline(yintercept = y_lines, colour = "grey85", linewidth = 0.1) +
-  # ridges
-  geom_density_ridges_gradient(scale = 1.8, rel_min_height = 0.01, size = 0.3) +
-  # axes/palette
+# Ridge plot: one panel per method
+p_post_by_year <- ggplot(post_year_long, aes(x = Estimate, y = Year, fill = after_stat(x))) +
   geom_vline(xintercept = 0, linetype = "dashed", colour = "grey20", linewidth = 0.8) +
-  scale_x_continuous("Estimate (logit)", limits = c(-20, 20), breaks = x_breaks,
-                     expand = expansion(add = c(0.7, 0.7))) +
-  scale_fill_viridis_c(name = "Estimate", limits = c(-20, 20), option = "D", oob = scales::squish) +
-  # one row of panels (Call Files | Dipnet Surveys | Egg Mass Surveys); Year axis appears once on left
-  facet_grid(cols = vars(Method)) +
-  labs(y = NULL, title = "Posterior Distributions of Year Effects on Detection by Year") +
+  geom_density_ridges_gradient(scale = 1.3, rel_min_height = 0.01, size = 0.35) +
+  scale_x_continuous("Year effect on logit scale") +
+  scale_fill_viridis_c(name = "Estimate", option = "C", oob = scales::squish) +
+  facet_wrap(~ Method, ncol = 1, scales = "free_y") +
+  labs(y = NULL, title = "Posterior distributions of year-specific effects (β_year × year_c[t])") +
   theme_minimal(base_size = 13) +
-  theme(panel.grid = element_blank(),
-        strip.text = element_text(face = "bold"))
+  theme(panel.grid = element_blank())
 
-p_year_cols
-ggsave("ridge_year_effect_by_year_cols.jpeg", p_year_cols,
-      width = 10, height = 6 + 0.35*length(year_labs), dpi = 300)
-
+p_post_by_year
+ggsave("ridge_year_effects_by_year.png", p_post_by_year, width = 9, height = 7, dpi = 300)
 
 ```
 
@@ -1596,6 +1582,14 @@ pr_same_sign <- function(v){
   if (is.na(m) || m == 0) return(NA_real_)
   mean(sign(v) == sign(m), na.rm = TRUE)
 }
+# ---- implied per-year effects from the scalar slope β_year ----
+stopifnot(exists("year_c"), exists("all_years"))
+by_call <- outer(as.numeric(s$beta_yr_call), year_c)  # [draw] x [year]
+by_dip  <- outer(as.numeric(s$beta_yr_dip ), year_c)
+by_egg  <- if (!is.null(s$beta_yr_egg)) outer(as.numeric(s$beta_yr_egg), year_c) else NULL
+colnames(by_call) <- colnames(by_dip) <- as.character(all_years)
+if (!is.null(by_egg)) colnames(by_egg) <- as.character(all_years)
+
 
 # ------------------------------------------------------------
 # 1) Naïve occupancy (per site + overall)
@@ -1731,6 +1725,14 @@ print(rel_all_tbl, n = Inf)
 # ------------------------------------------------------------
 # 5) Detection probability — overall (model-based; no site split)
 # ------------------------------------------------------------
+# implied per-year effects from the scalar slope β_year
+stopifnot(exists("year_c"), exists("all_years"))
+by_call <- outer(as.numeric(s$beta_yr_call), year_c)
+by_dip  <- outer(as.numeric(s$beta_yr_dip ), year_c)
+by_egg  <- if (!is.null(s$beta_yr_egg)) outer(as.numeric(s$beta_yr_egg), year_c) else NULL
+colnames(by_call) <- colnames(by_dip) <- as.character(all_years)
+if (!is.null(by_egg)) colnames(by_egg) <- as.character(all_years)
+
 avg_over_month_year <- function(b0, bmon, byear){
   M  <- ncol(as.data.frame(bmon))
   TT <- ncol(as.data.frame(byear))
@@ -1738,9 +1740,10 @@ avg_over_month_year <- function(b0, bmon, byear){
     sapply(seq_len(TT), function(t) inv_logit(b0 + bmon[,m] + byear[,t])))), na.rm = TRUE)
 }
 
-p_call <- avg_over_month_year(s$beta0_call, s$beta_mon_call, s$beta_yr_call)
-p_dip  <- avg_over_month_year(s$beta0_dip,  s$beta_mon_dip,  s$beta_yr_dip)
-p_egg  <- if (!is.null(s$beta0_egg)) avg_over_month_year(s$beta0_egg, s$beta_mon_egg, s$beta_yr_egg) else NULL
+p_call <- avg_over_month_year(s$beta0_call, s$beta_mon_call, by_call)
+p_dip  <- avg_over_month_year(s$beta0_dip,  s$beta_mon_dip,  by_dip)
+p_egg  <- if (!is.null(s$beta0_egg)) avg_over_month_year(s$beta0_egg, s$beta_mon_egg, by_egg) else NULL
+
 
 summ_p <- function(v, name){
   qs <- quantile(v, c(.025,.975), na.rm=TRUE)
@@ -1784,11 +1787,12 @@ month_fx_tbl <- bind_rows(
     summ_effects_logit(s$beta_mon_egg, "Month (Egg)"      , labs_for_months(s$beta_mon_egg))
 )
 year_fx_tbl <- bind_rows(
-  summ_effects_logit(s$beta_yr_call, "Year (Call files)", labs_for_years(s$beta_yr_call)),
-  summ_effects_logit(s$beta_yr_dip,  "Year (Dipnet)"    , labs_for_years(s$beta_yr_dip)),
-  if (!is.null(s$beta_yr_egg))
-    summ_effects_logit(s$beta_yr_egg, "Year (Egg)"      , labs_for_years(s$beta_yr_egg))
+  summ_effects_logit(by_call, "Year (Call files)", labs_for_years(by_call)),
+  summ_effects_logit(by_dip,  "Year (Dipnet)"    , labs_for_years(by_dip)),
+  if (!is.null(by_egg))
+    summ_effects_logit(by_egg, "Year (Egg)"      , labs_for_years(by_egg))
 )
+
 
 cat("\n=== Detection effects — logit scale (Month & Year) ===\n")
 print(head(month_fx_tbl, 12)); print(head(year_fx_tbl, 12))
@@ -1818,17 +1822,18 @@ marginal_year <- function(b0, bmon, byear, method_label, labels_vec){
 }
 
 pm_tbl <- bind_rows(
-  marginal_month(s$beta0_call, s$beta_mon_call, s$beta_yr_call, "Call files",  labs_for_months(s$beta_mon_call)),
-  marginal_month(s$beta0_dip,  s$beta_mon_dip,  s$beta_yr_dip,  "Dipnet surveys", labs_for_months(s$beta_mon_dip)),
+  marginal_month(s$beta0_call, s$beta_mon_call, by_call, "Call files",  labs_for_months(s$beta_mon_call)),
+  marginal_month(s$beta0_dip,  s$beta_mon_dip,  by_dip,  "Dipnet surveys", labs_for_months(s$beta_mon_dip)),
   if (!is.null(s$beta0_egg))
-    marginal_month(s$beta0_egg, s$beta_mon_egg, s$beta_yr_egg, "Egg mass surveys", labs_for_months(s$beta_mon_egg))
+    marginal_month(s$beta0_egg, s$beta_mon_egg, by_egg, "Egg mass surveys", labs_for_months(s$beta_mon_egg))
 )
 py_tbl <- bind_rows(
-  marginal_year(s$beta0_call, s$beta_mon_call, s$beta_yr_call, "Call files",  labs_for_years(s$beta_yr_call)),
-  marginal_year(s$beta0_dip,  s$beta_mon_dip,  s$beta_yr_dip,  "Dipnet surveys", labs_for_years(s$beta_yr_dip)),
+  marginal_year(s$beta0_call, s$beta_mon_call, by_call, "Call files",  labs_for_years(by_call)),
+  marginal_year(s$beta0_dip,  s$beta_mon_dip,  by_dip,  "Dipnet surveys", labs_for_years(by_dip)),
   if (!is.null(s$beta0_egg))
-    marginal_year(s$beta0_egg, s$beta_mon_egg, s$beta_yr_egg, "Egg mass surveys", labs_for_years(s$beta_yr_egg))
+    marginal_year(s$beta0_egg, s$beta_mon_egg, by_egg, "Egg mass surveys", labs_for_years(by_egg))
 )
+
 
 cat("\n=== Detection — marginal probabilities by Month (overall) ===\n")
 print(head(pm_tbl, 12))
@@ -1848,6 +1853,14 @@ library(stringr)
 
 stopifnot(exists("fit"), !is.null(fit$sims.list))
 s <- fit$sims.list
+# ---- implied per-year effects from the scalar slope β_year ----
+stopifnot(exists("year_c"), exists("all_years"))
+by_call <- outer(as.numeric(s$beta_yr_call), year_c)  # [draw] x [year]
+by_dip  <- outer(as.numeric(s$beta_yr_dip ), year_c)
+by_egg  <- if (!is.null(s$beta_yr_egg)) outer(as.numeric(s$beta_yr_egg), year_c) else NULL
+colnames(by_call) <- colnames(by_dip) <- as.character(all_years)
+if (!is.null(by_egg)) colnames(by_egg) <- as.character(all_years)
+
 
 # Helper already defined earlier; re-define here if not in scope
 if (!exists("pr_same_sign")) {
@@ -1863,7 +1876,12 @@ one_method_detection_tbl <- function(method){
   # method is one of "call", "dip", "egg"
   b0   <- s[[paste0("beta0_", method)]]
   bmon <- s[[paste0("beta_mon_", method)]]
-  byear<- s[[paste0("beta_yr_",  method)]]
+ byear <- switch(method,
+  "call" = by_call,
+  "dip"  = by_dip,
+  "egg"  = by_egg
+)
+
 
   out <- list()
 
@@ -1959,6 +1977,14 @@ library(dplyr)
 library(tidyr)
 
 s <- fit$sims.list
+# ---- implied per-year effects from the scalar slope β_year ----
+stopifnot(exists("year_c"), exists("all_years"))
+by_call <- outer(as.numeric(s$beta_yr_call), year_c)  # [draw] x [year]
+by_dip  <- outer(as.numeric(s$beta_yr_dip ), year_c)
+by_egg  <- if (!is.null(s$beta_yr_egg)) outer(as.numeric(s$beta_yr_egg), year_c) else NULL
+colnames(by_call) <- colnames(by_dip) <- as.character(all_years)
+if (!is.null(by_egg)) colnames(by_egg) <- as.character(all_years)
+
 
 # If not already defined
 if (!exists("pr_same_sign")) {
@@ -1982,7 +2008,11 @@ summ_from_draws <- function(v, label){
 one_method_compact <- function(method, method_label){
   b0    <- s[[paste0("beta0_", method)]]
   bmon  <- s[[paste0("beta_mon_", method)]]
-  byear <- s[[paste0("beta_yr_",  method)]]
+    byear <- switch(method,
+    "call" = by_call,
+    "dip"  = by_dip,
+    "egg"  = by_egg
+  )
 
   out <- list()
 
@@ -2029,12 +2059,24 @@ print(det_compact_tbl, n = Inf)
 # --- Overall detection estimate (posterior, model-based) ---
 inv_logit <- function(x) 1/(1+exp(-x))
 s <- fit$sims.list
+# implied per-year effects from the scalar slope β_year
+stopifnot(exists("year_c"), exists("all_years"))
+by_call <- outer(as.numeric(s$beta_yr_call), year_c)
+by_dip  <- outer(as.numeric(s$beta_yr_dip ), year_c)
+by_egg  <- if (!is.null(s$beta_yr_egg)) outer(as.numeric(s$beta_yr_egg), year_c) else NULL
+colnames(by_call) <- colnames(by_dip) <- as.character(all_years)
+if (!is.null(by_egg)) colnames(by_egg) <- as.character(all_years)
 
 overall_det <- function(method = c("call", "dip", "egg")) {
   method <- match.arg(method)
   b0   <- s[[paste0("beta0_", method)]]
   bmon <- s[[paste0("beta_mon_", method)]]
-  by   <- s[[paste0("beta_yr_",  method)]]
+  by <- switch(method,
+  "call" = by_call,
+  "dip"  = by_dip,
+  "egg"  = by_egg
+)
+
   stopifnot(!is.null(b0), !is.null(bmon), !is.null(by))
 
   M  <- ncol(as.data.frame(bmon))
@@ -2058,4 +2100,5 @@ overall_det("dip")
 overall_det("egg")  # only if egg survey params exist
 
 ```
+
 
